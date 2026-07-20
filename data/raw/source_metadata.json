@@ -1,0 +1,166 @@
+{
+  "generated_at": "2026-07-17T23:58:41.742235+00:00",
+  "fjelstul_datasets": [
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "players",
+      "file_path": "data/raw/fjelstul/players.csv",
+      "bytes": 1111882
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "squads",
+      "file_path": "data/raw/fjelstul/squads.csv",
+      "bytes": 1331815
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "player_appearances",
+      "file_path": "data/raw/fjelstul/player_appearances.csv",
+      "bytes": 4676840
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "goals",
+      "file_path": "data/raw/fjelstul/goals.csv",
+      "bytes": 734494
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "penalty_kicks",
+      "file_path": "data/raw/fjelstul/penalty_kicks.csv",
+      "bytes": 65128
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "bookings",
+      "file_path": "data/raw/fjelstul/bookings.csv",
+      "bytes": 598373
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "substitutions",
+      "file_path": "data/raw/fjelstul/substitutions.csv",
+      "bytes": 1878063
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "awards",
+      "file_path": "data/raw/fjelstul/awards.csv",
+      "bytes": 397
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "award_winners",
+      "file_path": "data/raw/fjelstul/award_winners.csv",
+      "bytes": 19791
+    },
+    {
+      "source_id": "fjelstul",
+      "source_name": "Fjelstul World Cup Database",
+      "dataset_name": "matches",
+      "file_path": "data/raw/fjelstul/matches.csv",
+      "bytes": 298930
+    }
+  ],
+  "statsbomb_coverage": [
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1958,
+      "competition_id": 43,
+      "season_id": 269,
+      "match_count": 2,
+      "file_path": "data/raw/statsbomb/43/269",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1962,
+      "competition_id": 43,
+      "season_id": 270,
+      "match_count": 1,
+      "file_path": "data/raw/statsbomb/43/270",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1970,
+      "competition_id": 43,
+      "season_id": 272,
+      "match_count": 6,
+      "file_path": "data/raw/statsbomb/43/272",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1974,
+      "competition_id": 43,
+      "season_id": 51,
+      "match_count": 6,
+      "file_path": "data/raw/statsbomb/43/51",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1986,
+      "competition_id": 43,
+      "season_id": 54,
+      "match_count": 3,
+      "file_path": "data/raw/statsbomb/43/54",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 1990,
+      "competition_id": 43,
+      "season_id": 55,
+      "match_count": 1,
+      "file_path": "data/raw/statsbomb/43/55",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 2018,
+      "competition_id": 43,
+      "season_id": 3,
+      "match_count": 64,
+      "file_path": "data/raw/statsbomb/43/3",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    },
+    {
+      "source_id": "statsbomb",
+      "source_name": "StatsBomb Open Data",
+      "dataset_name": "matches_lineups_events",
+      "coverage_year": 2022,
+      "competition_id": 43,
+      "season_id": 106,
+      "match_count": 64,
+      "file_path": "data/raw/statsbomb/43/106",
+      "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    }
+  ],
+  "issues": []
+}

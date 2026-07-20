@@ -1,0 +1,158 @@
+{
+  "raw_records": 1069,
+  "cleaned_records": 1069,
+  "duplicate_records": 0,
+  "missing_scores": 3,
+  "missing_stadiums": 0,
+  "alias_mappings": 2,
+  "alias_pairs": [
+    [
+      "United States",
+      "USA"
+    ],
+    [
+      "West Germany",
+      "Germany"
+    ]
+  ],
+  "source_counts": {
+    "worldcup-1930.json": {
+      "raw": 18,
+      "cleaned": 18,
+      "duplicates": 0,
+      "year": 1930
+    },
+    "worldcup-1934.json": {
+      "raw": 17,
+      "cleaned": 17,
+      "duplicates": 0,
+      "year": 1934
+    },
+    "worldcup-1938.json": {
+      "raw": 19,
+      "cleaned": 19,
+      "duplicates": 0,
+      "year": 1938
+    },
+    "worldcup-1950.json": {
+      "raw": 22,
+      "cleaned": 22,
+      "duplicates": 0,
+      "year": 1950
+    },
+    "worldcup-1954.json": {
+      "raw": 26,
+      "cleaned": 26,
+      "duplicates": 0,
+      "year": 1954
+    },
+    "worldcup-1958.json": {
+      "raw": 35,
+      "cleaned": 35,
+      "duplicates": 0,
+      "year": 1958
+    },
+    "worldcup-1962.json": {
+      "raw": 32,
+      "cleaned": 32,
+      "duplicates": 0,
+      "year": 1962
+    },
+    "worldcup-1966.json": {
+      "raw": 32,
+      "cleaned": 32,
+      "duplicates": 0,
+      "year": 1966
+    },
+    "worldcup-1970.json": {
+      "raw": 32,
+      "cleaned": 32,
+      "duplicates": 0,
+      "year": 1970
+    },
+    "worldcup-1974.json": {
+      "raw": 38,
+      "cleaned": 38,
+      "duplicates": 0,
+      "year": 1974
+    },
+    "worldcup-1978.json": {
+      "raw": 38,
+      "cleaned": 38,
+      "duplicates": 0,
+      "year": 1978
+    },
+    "worldcup-1982.json": {
+      "raw": 52,
+      "cleaned": 52,
+      "duplicates": 0,
+      "year": 1982
+    },
+    "worldcup-1986.json": {
+      "raw": 52,
+      "cleaned": 52,
+      "duplicates": 0,
+      "year": 1986
+    },
+    "worldcup-1990.json": {
+      "raw": 52,
+      "cleaned": 52,
+      "duplicates": 0,
+      "year": 1990
+    },
+    "worldcup-1994.json": {
+      "raw": 52,
+      "cleaned": 52,
+      "duplicates": 0,
+      "year": 1994
+    },
+    "worldcup-1998.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 1998
+    },
+    "worldcup-2002.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2002
+    },
+    "worldcup-2006.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2006
+    },
+    "worldcup-2010.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2010
+    },
+    "worldcup-2014.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2014
+    },
+    "worldcup-2018.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2018
+    },
+    "worldcup-2026.json": {
+      "raw": 104,
+      "cleaned": 104,
+      "duplicates": 0,
+      "year": 2026
+    },
+    "worldcup.json": {
+      "raw": 64,
+      "cleaned": 64,
+      "duplicates": 0,
+      "year": 2022
+    }
+  }
+}
