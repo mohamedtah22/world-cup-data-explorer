@@ -15,6 +15,19 @@ ALIASES = {
     "United States": "USA",
     "IR Iran": "Iran",
     "Korea Republic": "South Korea",
+    "Czechia": "Czech Republic",
+    "Republic of Ireland": "Ireland",
+    "Ivory Coast": "Côte d'Ivoire",
+    "Cote d'Ivoire": "Côte d'Ivoire",
+    "Bosnia and Herzegovina": "Bosnia & Herzegovina",
+    "Bosnia-Herzegovina": "Bosnia & Herzegovina",
+    "Türkiye": "Turkey",
+    "Curacao": "Curaçao",
+    "Congo DR": "DR Congo",
+}
+
+PLAYER_CANONICAL_ALIASES = {
+    "lionel andrés messi cuccittini": "lionel messi",
 }
 
 
@@ -220,11 +233,37 @@ def upsert_team(cursor, canonical_name):
 
 
 def normalize_person_name(name):
-    return re.sub(r"\s+", " ", (name or "Unknown player").strip()).casefold()
+    normalized = re.sub(r"\s+", " ", (name or "Unknown player").strip()).casefold()
+    return PLAYER_CANONICAL_ALIASES.get(normalized, normalized)
 
 
 def upsert_player(cursor, canonical_name, external_fjelstul_id=None, external_statsbomb_id=None):
     if external_fjelstul_id:
+        normalized = normalize_person_name(canonical_name)
+        cursor.execute(
+            """
+            SELECT p.player_id
+            FROM players p
+            JOIN player_aliases pa ON pa.player_id = p.player_id
+            WHERE pa.normalized_name = %s
+              AND (p.external_fjelstul_id IS NULL OR p.external_fjelstul_id = %s)
+            ORDER BY CASE WHEN p.external_fjelstul_id = %s THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (normalized, external_fjelstul_id, external_fjelstul_id),
+        )
+        row = cursor.fetchone()
+        if row:
+            cursor.execute(
+                """
+                UPDATE players
+                SET canonical_name = %s,
+                    external_fjelstul_id = COALESCE(external_fjelstul_id, %s)
+                WHERE player_id = %s
+                """,
+                (canonical_name, external_fjelstul_id, row[0]),
+            )
+            return row[0]
         return fetch_id(
             cursor,
             """
@@ -237,6 +276,31 @@ def upsert_player(cursor, canonical_name, external_fjelstul_id=None, external_st
             (canonical_name, external_fjelstul_id),
         )
     if external_statsbomb_id:
+        normalized = normalize_person_name(canonical_name)
+        cursor.execute(
+            """
+            SELECT p.player_id
+            FROM players p
+            JOIN player_aliases pa ON pa.player_id = p.player_id
+            WHERE pa.normalized_name = %s
+              AND (p.external_statsbomb_id IS NULL OR p.external_statsbomb_id = %s)
+            ORDER BY CASE WHEN p.external_statsbomb_id = %s THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (normalized, external_statsbomb_id, external_statsbomb_id),
+        )
+        row = cursor.fetchone()
+        if row:
+            cursor.execute(
+                """
+                UPDATE players
+                SET canonical_name = %s,
+                    external_statsbomb_id = COALESCE(external_statsbomb_id, %s)
+                WHERE player_id = %s
+                """,
+                (canonical_name, external_statsbomb_id, row[0]),
+            )
+            return row[0]
         return fetch_id(
             cursor,
             """

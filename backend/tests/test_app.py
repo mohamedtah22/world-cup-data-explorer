@@ -11,10 +11,21 @@ def client():
     return backend_app.app.test_client()
 
 
-def test_health_endpoint():
+def test_health_endpoint(monkeypatch):
+    monkeypatch.setattr(backend_app, "run_query", lambda *args, **kwargs: {"ok": 1})
     response = client().get("/health")
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
+    assert response.get_json() == {"status": "ok", "database": "connected"}
+
+
+def test_health_database_unavailable(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise backend_app.psycopg2.OperationalError("connection failed")
+
+    monkeypatch.setattr(backend_app, "run_query", unavailable)
+    response = client().get("/health")
+    assert response.status_code == 503
+    assert response.get_json() == {"status": "error", "database": "unavailable"}
 
 
 def test_dashboard_endpoint(monkeypatch):
@@ -61,6 +72,31 @@ def test_team_search(monkeypatch):
     response = client().get("/api/teams?search=bra&sort_by=team&order=asc")
     assert response.status_code == 200
     assert response.get_json()["results"][0]["team"] == "Brazil"
+
+
+def test_ranked_team_autocomplete(monkeypatch):
+    calls = []
+
+    def fake_query(sql, params=(), one=False):
+        calls.append((sql, params))
+        return [{"id": 1, "label": "Argentina"}, {"id": 2, "label": "Saudi Arabia"}]
+
+    monkeypatch.setattr(backend_app, "run_query", fake_query)
+    response = client().get("/api/search/teams?q=arg&limit=10")
+    assert response.status_code == 200
+    assert response.get_json()[0]["label"] == "Argentina"
+    assert "CASE" in calls[0][0]
+    assert calls[0][1] == ("arg", "arg", "arg", "arg", 10)
+
+
+def test_ranked_player_autocomplete_and_invalid_limit(monkeypatch):
+    monkeypatch.setattr(backend_app, "run_query", lambda *args, **kwargs: [{"id": 410, "label": "Harry Kane"}])
+    response = client().get("/api/search/players?q=kane&limit=1")
+    assert response.status_code == 200
+    assert response.get_json()[0]["label"] == "Harry Kane"
+
+    invalid = client().get("/api/search/players?q=kane&limit=1000")
+    assert invalid.status_code == 400
 
 
 def test_team_comparison(monkeypatch):

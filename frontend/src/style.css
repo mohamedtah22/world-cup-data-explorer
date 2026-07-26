@@ -257,6 +257,10 @@ label {
   font-size: 13px;
 }
 
+.autocomplete {
+  position: relative;
+}
+
 input,
 select {
   width: 100%;
@@ -266,6 +270,51 @@ select {
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 10px 11px;
+}
+
+.autocomplete-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.28);
+}
+
+.autocomplete-menu button,
+.autocomplete-state {
+  width: 100%;
+  display: block;
+  padding: 10px 11px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.autocomplete-menu button:last-child,
+.autocomplete-state:last-child {
+  border-bottom: 0;
+}
+
+.autocomplete-menu button:hover,
+.autocomplete-menu button.active-suggestion {
+  color: var(--gold);
+  background: var(--panel-2);
+}
+
+.autocomplete-state {
+  color: var(--muted);
+}
+
+.autocomplete-error {
+  color: var(--danger);
 }
 
 .filters button,

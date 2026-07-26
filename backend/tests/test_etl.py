@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import psycopg2
@@ -10,6 +11,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from load_database import canonical_team_name, clean_records, duplicate_key, load_database
+from load_player_data import load_fjelstul
 
 
 def test_alias_normalization():
@@ -18,6 +20,8 @@ def test_alias_normalization():
     assert canonical_team_name("IR Iran") == "Iran"
     assert canonical_team_name("Korea Republic") == "South Korea"
     assert canonical_team_name("Brazil") == "Brazil"
+    assert canonical_team_name("Ivory Coast") == "Côte d'Ivoire"
+    assert canonical_team_name("Bosnia-Herzegovina") == "Bosnia & Herzegovina"
 
 
 def test_duplicate_detection(tmp_path):
@@ -60,7 +64,13 @@ def test_etl_second_run_is_idempotent_when_test_database_is_available():
         pytest.skip("Set TEST_DATABASE_URL to run PostgreSQL ETL idempotency integration test")
 
     schema = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-    subprocess.run(["psql", database_url, "-f", str(schema)], check=True)
+    if shutil.which("psql"):
+        subprocess.run(["psql", database_url, "-f", str(schema)], check=True)
+    else:
+        with psycopg2.connect(database_url) as connection:
+            connection.set_session(autocommit=True)
+            with connection.cursor() as cursor:
+                cursor.execute(schema.read_text(encoding="utf-8"))
     first = load_database(database_url=database_url)
     second = load_database(database_url=database_url)
 
@@ -73,3 +83,9 @@ def test_etl_second_run_is_idempotent_when_test_database_is_available():
 
     assert first["matches"] == second["matches"] == match_count
     assert first["goals"] == second["goals"] == goal_count
+
+
+def test_fjelstul_goal_delete_is_scoped_to_linked_matches():
+    constants = "\n".join(str(value) for value in load_fjelstul.__code__.co_consts)
+    assert "source_goal_key NOT LIKE 'fjelstul:%%' AND match_id = ANY(%s)" in constants
+    assert "DELETE FROM goals WHERE source_goal_key NOT LIKE 'fjelstul:%'" not in constants

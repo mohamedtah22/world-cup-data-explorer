@@ -13,7 +13,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}})
+
+
+def allowed_origins():
+    raw = os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
+CORS(app, resources={r"/api/*": {"origins": allowed_origins()}, r"/health": {"origins": allowed_origins()}})
 
 _pool = None
 
@@ -24,7 +31,7 @@ def get_pool():
         _pool = SimpleConnectionPool(
             1,
             10,
-            dsn=os.getenv("DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5432/worldcup"),
+            dsn=os.getenv("DATABASE_URL") or "postgresql://postgres:postgres@127.0.0.1:5432/worldcup",
         )
     return _pool
 
@@ -87,6 +94,14 @@ def order_args(allowed_sort, default_sort):
     return allowed_sort[sort_by], order
 
 
+def search_args():
+    query = request.args.get("q", "").strip()
+    if len(query) > 120:
+        raise ValueError("q must be at most 120 characters")
+    limit = int_arg("limit", 10, 1, 25)
+    return query, limit
+
+
 def response(payload, status=200):
     return jsonify(payload), status
 
@@ -98,7 +113,8 @@ def bad_request(error):
 
 @app.errorhandler(psycopg2.Error)
 def database_error(error):
-    return response({"error": "database_error", "message": "Database operation failed"}, 500)
+    status = 503 if isinstance(error, psycopg2.OperationalError) else 500
+    return response({"error": "database_error", "message": "Database operation failed"}, status)
 
 
 @app.errorhandler(404)
@@ -113,7 +129,11 @@ def unhandled(error):
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    try:
+        run_query("SELECT 1 AS ok", one=True)
+    except psycopg2.Error:
+        return response({"status": "error", "database": "unavailable"}, 503)
+    return jsonify({"status": "ok", "database": "connected"})
 
 
 @app.get("/api/dashboard")
@@ -245,9 +265,9 @@ def player_totals_sql(where_tail=""):
     return f"""
     WITH appearances AS (
       SELECT player_id,
-             COUNT(*)::int AS appearances,
-             COALESCE(SUM((started IS TRUE)::int), 0)::int AS starts,
-             COALESCE(SUM(CASE WHEN started IS FALSE THEN 1 ELSE 0 END), 0)::int AS substitute_appearances,
+             COUNT(DISTINCT match_id)::int AS appearances,
+             COUNT(DISTINCT match_id) FILTER (WHERE started IS TRUE)::int AS starts,
+             COUNT(DISTINCT match_id) FILTER (WHERE started IS FALSE)::int AS substitute_appearances,
              SUM(minutes_played)::int AS minutes_played
       FROM player_appearances
       GROUP BY player_id
@@ -303,6 +323,58 @@ def player_totals_sql(where_tail=""):
       LEFT JOIN advanced ad ON ad.player_id = p.player_id
     {where_tail}
     """
+
+
+@app.get("/api/search/teams")
+def search_teams():
+    query, limit = search_args()
+    if not query:
+        return jsonify([])
+    return jsonify(
+        run_query(
+            """
+            SELECT team_id AS id, canonical_name AS label
+            FROM teams
+            WHERE canonical_name ILIKE '%%' || %s || '%%'
+            ORDER BY
+              CASE
+                WHEN LOWER(canonical_name) = LOWER(%s) THEN 0
+                WHEN canonical_name ILIKE %s || '%%' THEN 1
+                WHEN canonical_name ILIKE '%% ' || %s || '%%' THEN 2
+                ELSE 3
+              END,
+              canonical_name
+            LIMIT %s
+            """,
+            (query, query, query, query, limit),
+        )
+    )
+
+
+@app.get("/api/search/players")
+def search_players():
+    query, limit = search_args()
+    if not query:
+        return jsonify([])
+    return jsonify(
+        run_query(
+            """
+            SELECT player_id AS id, canonical_name AS label
+            FROM players
+            WHERE canonical_name ILIKE '%%' || %s || '%%'
+            ORDER BY
+              CASE
+                WHEN LOWER(canonical_name) = LOWER(%s) THEN 0
+                WHEN canonical_name ILIKE %s || '%%' THEN 1
+                WHEN canonical_name ILIKE '%% ' || %s || '%%' THEN 2
+                ELSE 3
+              END,
+              canonical_name
+            LIMIT %s
+            """,
+            (query, query, query, query, limit),
+        )
+    )
 
 
 @app.get("/api/tournaments")
@@ -660,8 +732,8 @@ def player_detail(player_id):
     tournaments_rows = run_query(
         """
         SELECT tr.year, tm.canonical_name AS team, pt.shirt_number, pt.position,
-               COUNT(DISTINCT pa.appearance_id)::int AS appearances,
-               COALESCE(SUM((pa.started IS TRUE)::int), 0)::int AS starts,
+               COUNT(DISTINCT pa.match_id)::int AS appearances,
+               COUNT(DISTINCT pa.match_id) FILTER (WHERE pa.started IS TRUE)::int AS starts,
                COUNT(DISTINCT g.goal_id)::int AS goals
         FROM player_tournaments pt
         JOIN tournaments tr ON tr.tournament_id = pt.tournament_id
@@ -697,7 +769,7 @@ def player_detail(player_id):
         """
         SELECT source_id, source_name, dataset_name, coverage_year, match_count, notes
         FROM source_metadata
-        WHERE source_id IN ('fjelstul', 'statsbomb')
+        WHERE source_id IN ('fjelstul', 'statsbomb', 'espn_2026')
         ORDER BY source_id, coverage_year NULLS FIRST, dataset_name
         """
     )

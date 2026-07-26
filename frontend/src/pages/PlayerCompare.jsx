@@ -1,49 +1,36 @@
 import { useEffect, useState } from "react";
+import AsyncEntityAutocomplete from "../components/AsyncEntityAutocomplete";
 import { ErrorState, LoadingState } from "../components/StateView";
 import { api } from "../services/api";
 
 export default function PlayerCompare() {
-  const [players, setPlayers] = useState([]);
-  const [player1, setPlayer1] = useState("");
-  const [player2, setPlayer2] = useState("");
+  const [player1, setPlayer1] = useState(null);
+  const [player2, setPlayer2] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.playerList({ limit: 100, sort_by: "name", order: "asc" }).then((payload) => setPlayers(payload.results)).catch((err) => setError(err.message));
-  }, []);
-
-  useEffect(() => {
-    if (!player1 || !player2 || player1 === player2) {
+    if (!player1?.id || !player2?.id || player1.id === player2.id) {
       setComparison(null);
       return;
     }
     setLoading(true);
     setError("");
-    api.comparePlayers(player1, player2).then(setComparison).catch((err) => setError(err.message)).finally(() => setLoading(false));
+    api.comparePlayers(player1.id, player2.id).then(setComparison).catch((err) => setError(err.message)).finally(() => setLoading(false));
   }, [player1, player2]);
 
   return (
     <div className="page-stack">
       <div className="filters compare-selectors">
-        <label>Player 1<SelectPlayer value={player1} setValue={setPlayer1} players={players} exclude={player2} /></label>
-        <label>Player 2<SelectPlayer value={player2} setValue={setPlayer2} players={players} exclude={player1} /></label>
+        <AsyncEntityAutocomplete label="Player 1" value={player1} onChange={setPlayer1} search={api.searchPlayers} excludeId={player2?.id} placeholder="Search players" />
+        <AsyncEntityAutocomplete label="Player 2" value={player2} onChange={setPlayer2} search={api.searchPlayers} excludeId={player1?.id} placeholder="Search players" />
       </div>
       {error && <ErrorState message={error} />}
       {loading && <LoadingState label="Loading player comparison" />}
       {!loading && !comparison && !error && <div className="state">Choose two different players to compare equivalent statistics.</div>}
       {comparison && <div className="compare-grid"><Card row={comparison.player1} /><Card row={comparison.player2} /></div>}
     </div>
-  );
-}
-
-function SelectPlayer({ value, setValue, players, exclude }) {
-  return (
-    <select value={value} onChange={(event) => setValue(event.target.value)}>
-      <option value="">Choose player</option>
-      {players.filter((player) => String(player.player_id) !== String(exclude)).map((player) => <option key={player.player_id} value={player.player_id}>{player.player}</option>)}
-    </select>
   );
 }
 

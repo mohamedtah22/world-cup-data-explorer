@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS data_quality_metrics CASCADE;
 DROP TABLE IF EXISTS data_quality_issues CASCADE;
 DROP TABLE IF EXISTS source_metadata CASCADE;
 DROP TABLE IF EXISTS player_events CASCADE;
+DROP TABLE IF EXISTS player_external_ids CASCADE;
 DROP TABLE IF EXISTS player_match_stats CASCADE;
 DROP TABLE IF EXISTS substitutions CASCADE;
 DROP TABLE IF EXISTS bookings CASCADE;
@@ -95,6 +96,16 @@ CREATE TABLE player_aliases (
   CHECK (original_name <> ''),
   CHECK (normalized_name <> ''),
   UNIQUE (source_id, normalized_name, player_id)
+);
+
+CREATE TABLE player_external_ids (
+  source_id VARCHAR(80) NOT NULL,
+  external_player_id VARCHAR(120) NOT NULL,
+  player_id BIGINT NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+  original_name VARCHAR(180),
+  team_id INTEGER REFERENCES teams(team_id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (source_id, external_player_id)
 );
 
 CREATE TABLE player_tournaments (
@@ -258,6 +269,7 @@ CREATE INDEX idx_matches_away_team ON matches(away_team_id);
 CREATE INDEX idx_matches_stadium ON matches(stadium_id);
 CREATE INDEX idx_player_aliases_player ON player_aliases(player_id);
 CREATE INDEX idx_player_aliases_normalized ON player_aliases(normalized_name);
+CREATE INDEX idx_player_external_ids_player ON player_external_ids(player_id);
 CREATE INDEX idx_player_tournaments_tournament ON player_tournaments(tournament_id);
 CREATE INDEX idx_player_tournaments_team ON player_tournaments(team_id);
 CREATE INDEX idx_player_appearances_player ON player_appearances(player_id);
@@ -266,6 +278,9 @@ CREATE INDEX idx_player_appearances_team ON player_appearances(team_id);
 CREATE INDEX idx_players_name ON players(canonical_name);
 CREATE INDEX idx_players_fjelstul ON players(external_fjelstul_id);
 CREATE INDEX idx_players_statsbomb ON players(external_statsbomb_id);
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_teams_name_trgm ON teams USING GIN (canonical_name gin_trgm_ops);
+CREATE INDEX idx_players_name_trgm ON players USING GIN (canonical_name gin_trgm_ops);
 CREATE INDEX idx_goals_player ON goals(player_id);
 CREATE INDEX idx_goals_team ON goals(team_id);
 CREATE INDEX idx_goals_tournament ON goals(tournament_id);

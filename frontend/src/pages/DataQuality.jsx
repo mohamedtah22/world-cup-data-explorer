@@ -32,6 +32,10 @@ export default function DataQuality() {
         <Metric label="Record conflicts" value={(metrics.conflicting_goal_records || 0) + (metrics.conflicting_appearance_records || 0)} />
       </div>
       <article className="panel prose">
+        <h2>Coverage</h2>
+        <p>Historical player data: Fjelstul, men&apos;s World Cups through 2022 when canonical matches link successfully. 2026 player appearances: ESPN public match summaries cached locally. 2026 matches and most goals: OpenFootball, with ESPN used only to fill missing completed 2026 scores and goal events. Advanced event data: StatsBomb Open Data, selected available World Cup seasons only.</p>
+      </article>
+      <article className="panel prose">
         <h2>Entity resolution and duplicate prevention</h2>
         <p>
           The ETL keeps every raw OpenFootball file unchanged, then resolves observed team labels into canonical team entities before loading. Examples include West Germany to Germany, United States to USA, IR Iran to Iran, and Korea Republic to South Korea. Duplicate matches are blocked with a deterministic key built from tournament year, date, stage, group, and canonical home and away teams, then enforced again by a unique PostgreSQL constraint.

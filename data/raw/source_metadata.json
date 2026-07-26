@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-17T23:58:41.742235+00:00",
+  "generated_at": "2026-07-26T00:55:11.658427+00:00",
   "fjelstul_datasets": [
     {
       "source_id": "fjelstul",
@@ -160,6 +160,19 @@
       "match_count": 64,
       "file_path": "data/raw/statsbomb/43/106",
       "notes": "Detected from competitions.json; only available FIFA World Cup seasons were downloaded."
+    }
+  ],
+  "espn_2026_coverage": [
+    {
+      "source_id": "espn_2026",
+      "source_name": "ESPN public soccer JSON",
+      "dataset_name": "scoreboard_summaries",
+      "coverage_year": 2026,
+      "match_count": 104,
+      "file_path": "data/raw/espn_2026",
+      "downloaded_at": "2026-07-26T00:56:14.944516+00:00",
+      "endpoint": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?limit=200&dates=20260611-20260719",
+      "notes": "Unofficial public JSON cached locally; schemas may change. Completed events: 104; summaries with rosters: 104; scoreboard refreshed."
     }
   ],
   "issues": []

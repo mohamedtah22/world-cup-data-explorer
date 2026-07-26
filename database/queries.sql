@@ -49,7 +49,7 @@ WHERE tr.year = 2022
 ORDER BY m.match_date DESC;
 
 -- 5. Top scorers, excluding own goals
-SELECT p.normalized_name AS player, tm.canonical_name AS team, COUNT(g.goal_id)::int AS goals
+SELECT p.canonical_name AS player, tm.canonical_name AS team, COUNT(g.goal_id)::int AS goals
 FROM goals g
 JOIN players p ON p.player_id = g.player_id
 JOIN teams tm ON tm.team_id = g.team_id
@@ -169,3 +169,17 @@ JOIN tournaments tr ON tr.tournament_id = m.tournament_id
 WHERE s.source_id = 'statsbomb'
 GROUP BY tr.year
 ORDER BY tr.year;
+
+-- 15. Ranked autocomplete search for players
+SELECT player_id AS id, canonical_name AS label
+FROM players
+WHERE canonical_name ILIKE '%' || 'messi' || '%'
+ORDER BY
+  CASE
+    WHEN LOWER(canonical_name) = LOWER('messi') THEN 0
+    WHEN canonical_name ILIKE 'messi' || '%' THEN 1
+    WHEN canonical_name ILIKE '% ' || 'messi' || '%' THEN 2
+    ELSE 3
+  END,
+  canonical_name
+LIMIT 10;

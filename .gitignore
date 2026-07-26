@@ -1,11 +1,16 @@
 node_modules/
 dist/
+frontend/dist/
+.venv/
 venv/
 __pycache__/
 .env
+backend/.env
+frontend/.env
 .DS_Store
 .pytest_cache/
 *.pyc
+*.log
 *.zip
 .openai/
 .vinext/

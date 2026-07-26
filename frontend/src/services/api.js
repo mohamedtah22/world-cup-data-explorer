@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:3001/api").replace(/\/+$/, "");
 
 function buildQuery(params = {}) {
   const search = new URLSearchParams();
@@ -11,8 +11,9 @@ function buildQuery(params = {}) {
   return text ? `?${text}` : "";
 }
 
-async function request(path, params) {
-  const response = await fetch(`${API_URL}${path}${buildQuery(params)}`);
+async function request(path, params, options = {}) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const response = await fetch(`${API_URL}${normalizedPath}${buildQuery(params)}`, options);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload.message || "Request failed");
@@ -34,5 +35,7 @@ export const api = {
   playerLeaderboards: (params) => request("/players/leaderboards", params),
   comparePlayers: (player1, player2) => request("/players/compare", { player1, player2 }),
   compare: (team1, team2) => request("/compare", { team1, team2 }),
+  searchTeams: (params, options) => request("/search/teams", params, options),
+  searchPlayers: (params, options) => request("/search/players", params, options),
   dataQuality: () => request("/data-quality"),
 };

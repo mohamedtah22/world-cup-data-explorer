@@ -2,26 +2,19 @@
 
 ## Application Overview
 
-World Cup Data Explorer is a full-stack data-management application for FIFA World Cup match data. A Python ETL pipeline reads OpenFootball JSON files, cleans and normalizes the records, and loads them into PostgreSQL. A Python Flask API exposes SQL-backed endpoints for dashboard metrics, tournaments, teams, matches, player scoring, team comparison, and data quality. The frontend is a React JavaScript dashboard with a dark navy and gold sports style. The production frontend requests all final statistics from the Flask API at `http://localhost:3001/api`; it does not use static dashboard JSON as a data source.
+World Cup Data Explorer is a full-stack data-management application for FIFA Men’s World Cup data through 2026. A Python ETL pipeline reads OpenFootball JSON, Fjelstul CSVs, StatsBomb open-data JSON, and cached ESPN 2026 public JSON, then loads PostgreSQL. A Flask API exposes SQL-backed dashboard, tournament, team, match, player, comparison, autocomplete, and data-quality endpoints. The React/Vite frontend requests final statistics from the Flask API; it does not use static dashboard JSON as a data source.
 
-The verified final database load contains 1,069 OpenFootball raw match records, 23 tournaments, 91 teams, 1,069 canonical matches, 11,916 players, 19,362 linked player appearances, 23,390 player-match statistic rows, and 497,198 StatsBomb event rows. The ETL detected 3 missing scores and preserves data-quality issues for player rows that cannot be safely linked without weak matching.
+The verified final database load contains 1,069 canonical matches, 23 tournaments, 89 teams, 3,026 goals, 9,868 players, 23,906 linked player appearances, 27,934 player-match statistic rows, and 497,198 StatsBomb event rows. The completed 2026 tournament has 104 matches, 306 goals, no missing scores, and 3,288 ESPN-sourced player appearances.
 
 ## Data Sources and Descriptions
 
-The match source data is stored in `data/raw/openfootball`. Each JSON file represents one World Cup edition and contains match-level fields such as date, time, stage, group, teams, full-time score, venue, and nested goal arrays.
+OpenFootball is the broad match source, including the 104-match 2026 tournament. It supplies most 2026 goals; ESPN fills only completed 2026 scores and goal events missing from OpenFootball.
 
-Historical player data comes from the Fjelstul World Cup Database CSV exports. Fjelstul is treated as the authoritative source for player identity, squads, appearances, goals, penalty kicks, bookings, substitutions, awards, and award winners. The loader uses the real CSV files under `data/raw/fjelstul`.
+Historical player data comes from Fjelstul World Cup Database CSV exports. Fjelstul is authoritative for men’s player identities, squads, appearances, goals, penalty kicks, bookings, substitutions, awards, and award winners through 2022 when its matches link to canonical OpenFootball matches. Women’s tournament rows in the upstream CSVs are filtered out.
 
-StatsBomb Open Data is treated only as an additional event-data source. The project first downloads `competitions.json`, detects available men’s FIFA World Cup seasons, and downloads matches, lineups, and events only for those seasons. The detected coverage is recorded in `data/raw/source_metadata.json` and `source_metadata`. The verified detected seasons are 1958, 1962, 1970, 1974, 1986, 1990, 2018, and 2022.
+ESPN public soccer JSON is an unofficial 2026 supplemental source. The downloader caches the scoreboard and 104 summary responses under `data/raw/espn_2026/`, with retries, timeout handling, a descriptive User-Agent, and `--refresh`. ESPN rosters provide 2026 appearances, starters, substitutions, cards, and supported player stats.
 
-Important source fields:
-
-- `name`: tournament name and year.
-- `matches`: match records for the tournament.
-- `team1` and `team2`: original team labels from the source.
-- `score.ft`: full-time score.
-- `goals1` and `goals2`: nested goal events.
-- `ground`: stadium and city in one string for many records.
+StatsBomb Open Data is advanced-event enrichment only. The loader detects available men’s World Cup seasons from `competitions.json` and downloads matches, lineups, and events only for those seasons. Verified coverage is 1958, 1962, 1970, 1974, 1986, 1990, 2018, and 2022; the app does not claim full historical advanced coverage.
 
 ## Data-Management Challenges
 
@@ -29,7 +22,9 @@ The source files combine semi-structured JSON, CSV tables, and nested event data
 
 Venue data is also inconsistent. Some rows use `Stadium, City`, while some newer rows contain a single location string or a parenthesized city. The ETL separates venue name and city when possible and uses explicit unknown values only for missing raw venues. Goal minutes can be integers, strings such as `90+4`, or an integer with an `offset`; these are converted into `minute` and `stoppage_minute` integer columns.
 
-Player identity is resolved conservatively. Fjelstul external player IDs are used as authoritative identifiers. StatsBomb players are matched through team, normalized lineup name, and existing aliases where possible. The loader never merges two players based only on weak partial-name matches; uncertain and unmatched rows are recorded in `data_quality_issues`.
+Player identity is resolved conservatively. Fjelstul external IDs are authoritative through 2022. ESPN player IDs are stored in `player_external_ids`. StatsBomb and ESPN names are matched by external ID first, otherwise by normalized full name plus team and known aliases. Controlled aliases handle source drift such as `Lionel Andrés Messi Cuccittini` to `Lionel Messi`; weak partial matches are not used. Unmatched or ambiguous rows are recorded in `data_quality_issues`.
+
+OpenFootball goal-only players are later reconciled to canonical ESPN/Fjelstul players when a unique same-team alias exists, so rows such as `Messi`, `L. Messi`, and `Lionel Messi` do not split the same scorer’s facts. Non-Fjelstul goals are deleted only for matches successfully linked to Fjelstul, preserving 2026 OpenFootball goals and unmatched historical goals.
 
 Unavailable advanced statistics are stored as `NULL`, not zero. A zero value means the event data covers that match and the event count is truly zero. `NULL` means the source does not provide that statistic for that player or match.
 
@@ -48,12 +43,30 @@ The PostgreSQL schema contains core match and player tables:
 - `player_appearances`: match appearances, starts, substitutions, captain, goalkeeper, and minutes when known.
 - `player_match_stats`: per-match basic and advanced statistics with source provenance.
 - `bookings` and `substitutions`: disciplinary and substitution facts.
+- `player_external_ids`: ESPN and other non-core external player identifiers.
 - `player_events`: StatsBomb raw event provenance and event metadata.
 - `goals`: goal events linked to matches, players, teams, and tournaments.
 
-Primary keys are defined for every table. Foreign keys enforce relationships from matches to tournaments, teams, and stadiums, and from goals to matches, players, teams, and tournaments. Unique constraints protect tournament years, canonical team names, aliases, source match keys, source goal keys, and player/team pairs. Check constraints validate year ranges, non-empty names, scores, goal minutes, stoppage minutes, and different home and away teams. Indexes support common queries by date, tournament, stage, teams, stadiums, players, and goal aggregates.
+Primary keys are defined for every table. Foreign keys enforce relationships from matches to tournaments, teams, stadiums, players, and source-specific facts. Unique constraints protect tournament years, canonical team names, aliases, source match keys, source goal keys, player appearances, source events, and external IDs. Check constraints validate year ranges, non-empty names, scores, minutes, and different home/away teams.
 
-Supporting tables, `source_metadata`, `data_quality_metrics`, `data_quality_sources`, and `data_quality_issues`, store source coverage and ETL audit results for the Data Quality page.
+Readable ERD:
+
+```text
+tournaments 1--* matches *--1 teams (home/away)
+matches *--0..1 stadiums
+matches 1--* goals *--0..1 players
+matches 1--* player_appearances *--1 players
+players 1--* player_tournaments *--1 teams
+players 1--* player_aliases
+players 1--* player_external_ids
+players 1--* player_match_stats *--1 matches
+players 1--* bookings *--1 matches
+matches 1--* substitutions
+matches 1--* player_events
+source_metadata and data_quality_* audit coverage and ETL issues
+```
+
+B-tree indexes support joins and filters by tournament, date, team, player, and event source. `pg_trgm` GIN indexes support substring autocomplete on team/player names. `EXPLAIN ANALYZE` for player search `messi` used `idx_players_name_trgm` with a Bitmap Index Scan and Bitmap Heap Scan in about 0.23 ms. Team search `arg` used a sequential scan in about 0.07 ms because the table has only 89 rows, making a scan cheaper.
 
 ## Representative SQL Queries
 
@@ -103,4 +116,21 @@ ORDER BY goals DESC, player ASC
 LIMIT 20;
 ```
 
-The full query file also includes top scorer per tournament with a window function, player tournament history, goals per appearance, players who represented multiple teams, player comparison, and advanced-statistics coverage.
+Autocomplete search:
+
+```sql
+SELECT player_id AS id, canonical_name AS label
+FROM players
+WHERE canonical_name ILIKE '%' || 'messi' || '%'
+ORDER BY
+  CASE
+    WHEN LOWER(canonical_name) = LOWER('messi') THEN 0
+    WHEN canonical_name ILIKE 'messi' || '%' THEN 1
+    WHEN canonical_name ILIKE '% ' || 'messi' || '%' THEN 2
+    ELSE 3
+  END,
+  canonical_name
+LIMIT 10;
+```
+
+The full query file also includes INNER JOIN and LEFT JOIN examples, top scorer per tournament with a window function, player tournament history, goals per appearance with `NULLIF`, player comparison, and advanced-statistics coverage.

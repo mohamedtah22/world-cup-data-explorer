@@ -1,58 +1,35 @@
 import { useEffect, useState } from "react";
+import AsyncEntityAutocomplete from "../components/AsyncEntityAutocomplete";
 import { ErrorState, LoadingState } from "../components/StateView";
 import { api } from "../services/api";
 
 export default function Compare() {
-  const [teams, setTeams] = useState([]);
-  const [team1, setTeam1] = useState("");
-  const [team2, setTeam2] = useState("");
+  const [team1, setTeam1] = useState(null);
+  const [team2, setTeam2] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.teams({ limit: 500, sort_by: "team", order: "asc" }).then((payload) => setTeams(payload.results)).catch((err) => setError(err.message));
-  }, []);
-
-  useEffect(() => {
-    if (!team1 || !team2 || team1 === team2) {
+    if (!team1?.id || !team2?.id || team1.id === team2.id) {
       setComparison(null);
       return;
     }
     setLoading(true);
     setError("");
-    api.compare(team1, team2).then(setComparison).catch((err) => setError(err.message)).finally(() => setLoading(false));
+    api.compare(team1.id, team2.id).then(setComparison).catch((err) => setError(err.message)).finally(() => setLoading(false));
   }, [team1, team2]);
 
   return (
     <div className="page-stack">
       <div className="filters compare-selectors">
-        <label>
-          Team 1
-          <select
-            value={team1}
-            onChange={(event) => {
-              const value = event.target.value;
-              setTeam1(value);
-              if (value === team2) setTeam2("");
-            }}
-          >
-            <option value="">Choose team</option>
-            {teams.map((team) => <option key={team.team_id} value={team.team_id}>{team.team}</option>)}
-          </select>
-        </label>
-        <label>
-          Team 2
-          <select value={team2} onChange={(event) => setTeam2(event.target.value)}>
-            <option value="">Choose team</option>
-            {teams.filter((team) => String(team.team_id) !== String(team1)).map((team) => <option key={team.team_id} value={team.team_id}>{team.team}</option>)}
-          </select>
-        </label>
+        <AsyncEntityAutocomplete label="Team 1" value={team1} onChange={setTeam1} search={api.searchTeams} excludeId={team2?.id} placeholder="Search teams" />
+        <AsyncEntityAutocomplete label="Team 2" value={team2} onChange={setTeam2} search={api.searchTeams} excludeId={team1?.id} placeholder="Search teams" />
       </div>
-      {team1 && team2 && team1 === team2 && <ErrorState message="Choose two different teams." />}
+      {team1?.id && team2?.id && team1.id === team2.id && <ErrorState message="Choose two different teams." />}
       {error && <ErrorState message={error} />}
       {loading && <LoadingState label="Loading comparison" />}
-      {!loading && !error && (!team1 || !team2) && <div className="state">Choose two different teams to compare their SQL-calculated records.</div>}
+      {!loading && !error && (!team1?.id || !team2?.id) && <div className="state">Choose two different teams to compare their SQL-calculated records.</div>}
       {comparison && (
         <div className="compare-grid">
           <CompareCard row={comparison.team1} />
