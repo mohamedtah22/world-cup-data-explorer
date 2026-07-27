@@ -42,7 +42,7 @@ def test_top_scorer_calculation_endpoint(monkeypatch):
     assert response.get_json()[0]["goals"] == 16
 
 
-def test_null_versus_zero_advanced_statistics_endpoint(monkeypatch):
+def test_player_comparison_includes_basic_assists(monkeypatch):
     monkeypatch.setattr(
         backend_app,
         "run_query",
@@ -52,8 +52,8 @@ def test_null_versus_zero_advanced_statistics_endpoint(monkeypatch):
             "appearances": 1,
             "starts": 1,
             "goals": 0,
+            "assists": 1,
             "minutes_played": None,
-            "advanced_statistics": None,
         }
         if "WHERE player_id IN" in sql
         else [],

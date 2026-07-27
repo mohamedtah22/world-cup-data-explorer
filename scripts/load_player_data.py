@@ -10,7 +10,7 @@ from pathlib import Path
 
 import psycopg2
 from dotenv import load_dotenv
-from psycopg2.extras import Json, execute_batch, execute_values
+from psycopg2.extras import Json, execute_values
 
 from load_database import canonical_team_name, fetch_id, normalize_person_name, upsert_player, upsert_team
 
@@ -446,7 +446,6 @@ def load_fjelstul(cursor, stats, phase="all"):
 
     goal_counts = Counter()
     penalty_counts = Counter()
-    card_counts = Counter()
 
     # Fjelstul is authoritative only where its match is safely linked. Keep
     # OpenFootball goals for unmatched historical matches and 2026.
@@ -529,7 +528,6 @@ def load_fjelstul(cursor, stats, phase="all"):
             record_issue(cursor, "fjelstul", "unmatched_booking_player", "Could not link booking to canonical player/match/team", "booking", row.get("booking_id"), row)
             continue
         card_type = "second_yellow" if parse_bool(row.get("second_yellow_card")) else ("red" if parse_bool(row.get("red_card")) else "yellow")
-        card_counts[(player_id, match_id, card_type)] += 1
         booking_rows.append((row["booking_id"], match_id, player_id, team_id, parse_int(row.get("minute_regulation")), card_type, "fjelstul"))
     for batch_index, batch in chunks(booking_rows):
         execute_values(
@@ -566,8 +564,6 @@ def load_fjelstul(cursor, stats, phase="all"):
                 match_id,
                 goal_counts.get((player_id, match_id), 0),
                 penalty_counts.get((player_id, match_id), 0),
-                card_counts.get((player_id, match_id, "yellow"), 0) + card_counts.get((player_id, match_id, "second_yellow"), 0),
-                card_counts.get((player_id, match_id, "red"), 0) + card_counts.get((player_id, match_id, "second_yellow"), 0),
                 "fjelstul",
             )
         )
@@ -591,17 +587,15 @@ def load_fjelstul(cursor, stats, phase="all"):
             """
             INSERT INTO player_match_stats (
               player_id, match_id, minutes_played, goals, penalties_scored,
-              yellow_cards, red_cards, source_id
+              source_id
             )
             VALUES %s
             ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
               goals = EXCLUDED.goals,
-              penalties_scored = EXCLUDED.penalties_scored,
-              yellow_cards = EXCLUDED.yellow_cards,
-              red_cards = EXCLUDED.red_cards
+              penalties_scored = EXCLUDED.penalties_scored
             """,
             batch,
-            template="(%s, %s, NULL, %s, %s, %s, %s, %s)",
+            template="(%s, %s, NULL, %s, %s, %s)",
             page_size=BATCH_SIZE,
         )
         progress(f"fjelstul player stats batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} stat rows")
@@ -784,20 +778,13 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                                 )
                         lineup_player_ids[item["player_id"]] = (player_id, team_id)
 
-            aggregates = defaultdict(lambda: {
-                "shots": 0,
-                "shots_on_target": 0,
-                "passes_attempted": 0,
-                "passes_completed": 0,
-                "chances_created": 0,
-                "tackles": 0,
-                "interceptions": 0,
-            })
+            aggregates = defaultdict(lambda: {"assists": 0})
             if events_path.exists():
-                event_rows = []
                 events = json.loads(events_path.read_text(encoding="utf-8"))
                 total_events_parsed += len(events)
                 for event in events:
+                    if event.get("type", {}).get("name") != "Pass" or not event.get("pass", {}).get("goal_assist"):
+                        continue
                     player = event.get("player")
                     team = event.get("team")
                     player_id = team_id = None
@@ -807,72 +794,14 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                         team_id = teams.get(canonical_team_name(team["name"]))
                         if team_id:
                             player_id = player_lookup.get((team_id, normalize_person_name(player["name"])))
-                    event_type = event.get("type", {}).get("name", "Unknown")
-                    outcome = None
-                    if event_type == "Shot":
-                        outcome = event.get("shot", {}).get("outcome", {}).get("name")
-                    elif event_type == "Pass":
-                        outcome = event.get("pass", {}).get("outcome", {}).get("name")
-                    elif event_type == "Duel":
-                        outcome = event.get("duel", {}).get("outcome", {}).get("name")
-                    if STORE_PLAYER_EVENTS and event.get("id"):
-                        event_rows.append(
-                            (
-                                "statsbomb",
-                                event["id"],
-                                canonical_match_id,
-                                player_id,
-                                team_id,
-                                event_type,
-                                event.get("minute"),
-                                event.get("second"),
-                                outcome,
-                                Json(event) if STORE_RAW_EVENT_JSON else None,
-                            )
-                        )
                     if player_id:
-                        key = (player_id, canonical_match_id)
-                        if event_type == "Shot":
-                            aggregates[key]["shots"] += 1
-                            if outcome in {"Goal", "Saved", "Saved to Post"}:
-                                aggregates[key]["shots_on_target"] += 1
-                        elif event_type == "Pass":
-                            aggregates[key]["passes_attempted"] += 1
-                            if not event.get("pass", {}).get("outcome"):
-                                aggregates[key]["passes_completed"] += 1
-                            if event.get("pass", {}).get("shot_assist") or event.get("pass", {}).get("goal_assist"):
-                                aggregates[key]["chances_created"] += 1
-                        elif event_type == "Duel" and event.get("duel", {}).get("type", {}).get("name") == "Tackle":
-                            aggregates[key]["tackles"] += 1
-                        elif event_type == "Interception":
-                            aggregates[key]["interceptions"] += 1
-                if STORE_PLAYER_EVENTS and event_rows:
-                    execute_batch(
-                        cursor,
-                        """
-                        INSERT INTO player_events (
-                          source_id, external_event_id, match_id, player_id, team_id,
-                          event_type, minute, second, outcome, raw_event_json
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (source_id, external_event_id) DO NOTHING
-                        """,
-                        event_rows,
-                        page_size=1000,
-                    )
-                    total_events_stored += len(event_rows)
+                        aggregates[(player_id, canonical_match_id)]["assists"] += 1
 
             stat_rows = [
                 (
                     player_id,
                     match_id,
-                    values["shots"],
-                    values["shots_on_target"],
-                    values["passes_attempted"],
-                    values["passes_completed"],
-                    values["chances_created"],
-                    values["tackles"],
-                    values["interceptions"],
+                    values["assists"],
                     "statsbomb",
                 )
                 for (player_id, match_id), values in aggregates.items()
@@ -882,18 +811,11 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                     cursor,
                     """
                     INSERT INTO player_match_stats (
-                      player_id, match_id, shots, shots_on_target, passes_attempted,
-                      passes_completed, chances_created, tackles, interceptions, source_id
+                      player_id, match_id, assists, source_id
                     )
                     VALUES %s
                     ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
-                      shots = EXCLUDED.shots,
-                      shots_on_target = EXCLUDED.shots_on_target,
-                      passes_attempted = EXCLUDED.passes_attempted,
-                      passes_completed = EXCLUDED.passes_completed,
-                      chances_created = EXCLUDED.chances_created,
-                      tackles = EXCLUDED.tackles,
-                      interceptions = EXCLUDED.interceptions
+                      assists = EXCLUDED.assists
                     """,
                     stat_rows,
                     page_size=BATCH_SIZE,
@@ -1166,27 +1088,18 @@ def load_espn_2026(cursor, stats):
                 cursor.execute(
                     """
                     INSERT INTO player_match_stats (
-                      player_id, match_id, goals, penalties_scored, assists, shots, shots_on_target,
-                      yellow_cards, red_cards, source_id
+                      player_id, match_id, goals, penalties_scored, assists, source_id
                     )
-                    VALUES (%s, %s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, NULL, %s, %s)
                     ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
                       goals = EXCLUDED.goals,
-                      assists = EXCLUDED.assists,
-                      shots = EXCLUDED.shots,
-                      shots_on_target = EXCLUDED.shots_on_target,
-                      yellow_cards = EXCLUDED.yellow_cards,
-                      red_cards = EXCLUDED.red_cards
+                      assists = EXCLUDED.assists
                     """,
                     (
                         player_id,
                         match_id,
                         parse_stat_int(item.get("stats"), "totalGoals"),
                         parse_stat_int(item.get("stats"), "goalAssists"),
-                        parse_stat_int(item.get("stats"), "totalShots"),
-                        parse_stat_int(item.get("stats"), "shotsOnTarget"),
-                        parse_stat_int(item.get("stats"), "yellowCards"),
-                        parse_stat_int(item.get("stats"), "redCards"),
                         "espn_2026",
                     ),
                 )
@@ -1285,10 +1198,10 @@ def load_espn_2026(cursor, stats):
 def update_quality_metrics(cursor, stats):
     cursor.execute("SELECT COUNT(*) FROM player_aliases")
     player_aliases = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(DISTINCT player_id) FROM player_match_stats WHERE source_id = 'statsbomb'")
+    cursor.execute("SELECT COUNT(DISTINCT player_id) FROM player_match_stats WHERE source_id = 'statsbomb' AND assists IS NOT NULL")
     statsbomb_players = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM players WHERE player_id NOT IN (SELECT DISTINCT player_id FROM player_match_stats WHERE source_id = 'statsbomb')")
-    no_advanced = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM players WHERE player_id NOT IN (SELECT DISTINCT player_id FROM player_match_stats WHERE source_id = 'statsbomb' AND assists IS NOT NULL)")
+    no_statsbomb_assists = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM data_quality_issues WHERE issue_type ILIKE '%ambiguous%'")
     ambiguous = cursor.fetchone()[0]
     cursor.execute(
@@ -1309,7 +1222,7 @@ def update_quality_metrics(cursor, stats):
             stats["unmatched_players"],
             ambiguous,
             statsbomb_players,
-            no_advanced,
+            no_statsbomb_assists,
             stats["conflicting_goal_records"],
             stats["conflicting_appearance_records"],
         ),
@@ -1317,7 +1230,7 @@ def update_quality_metrics(cursor, stats):
     return {
         "player_aliases": player_aliases,
         "statsbomb_players": statsbomb_players,
-        "players_without_advanced_coverage": no_advanced,
+        "players_without_statsbomb_assists": no_statsbomb_assists,
         "ambiguous_issues": ambiguous,
     }
 
@@ -1328,10 +1241,13 @@ def clear_source_quality_issues(cursor, stats):
 
 
 def clear_statsbomb_player_events_when_disabled(cursor, stats):
-    if STORE_PLAYER_EVENTS:
-        return {"deleted_player_events": 0}
     cursor.execute("DELETE FROM player_events WHERE source_id = %s", ("statsbomb",))
     return {"deleted_player_events": cursor.rowcount}
+
+
+def clear_statsbomb_match_stats(cursor, stats):
+    cursor.execute("DELETE FROM player_match_stats WHERE source_id = %s", ("statsbomb",))
+    return {"deleted_statsbomb_match_stats": cursor.rowcount}
 
 
 def statsbomb_coverages():
@@ -1354,8 +1270,9 @@ def load_player_data(database_url=None, resume=False):
             ("Fjelstul appearances, goals, bookings, and substitutions", lambda cursor, stats: load_fjelstul(cursor, stats, phase="events")),
         ]
     )
-    if not STORE_PLAYER_EVENTS:
-        phases.append(("clear StatsBomb player_events", clear_statsbomb_player_events_when_disabled))
+    phases.append(("clear StatsBomb player_events", clear_statsbomb_player_events_when_disabled))
+    if not resume:
+        phases.append(("clear StatsBomb player_match_stats", clear_statsbomb_match_stats))
     for coverage in statsbomb_coverages():
         label = f"StatsBomb season {coverage.get('coverage_year') or coverage.get('season_id')}"
         phases.append((label, lambda cursor, stats, coverage=coverage: load_statsbomb(cursor, stats, coverage)))

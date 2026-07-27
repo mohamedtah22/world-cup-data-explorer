@@ -201,6 +201,14 @@ def test_statsbomb_player_events_are_off_by_default():
     assert load_player_data_module.STORE_PLAYER_EVENTS is False
 
 
+def test_statsbomb_loader_is_assists_only():
+    constants = "\n".join(str(value) for value in load_player_data_module.load_statsbomb.__code__.co_consts)
+    assert "goal_assist" in constants
+    assert "INSERT INTO player_events" not in constants
+    assert "player_id, match_id, assists, source_id" in constants
+    assert "shots, shots_on_target" not in constants
+
+
 def test_statsbomb_event_cleanup_when_storage_disabled(monkeypatch):
     monkeypatch.setattr(load_player_data_module, "STORE_PLAYER_EVENTS", False)
 
@@ -219,16 +227,6 @@ def test_statsbomb_event_cleanup_when_storage_disabled(monkeypatch):
     assert result == {"deleted_player_events": 7}
     assert "DELETE FROM player_events WHERE source_id = %s" in cursor.calls[0][0]
     assert cursor.calls[0][1] == ("statsbomb",)
-
-
-def test_statsbomb_event_cleanup_skips_when_storage_enabled(monkeypatch):
-    monkeypatch.setattr(load_player_data_module, "STORE_PLAYER_EVENTS", True)
-
-    class FakeCursor:
-        def execute(self, *args, **kwargs):
-            raise AssertionError("cleanup should not run when STORE_PLAYER_EVENTS=true")
-
-    assert load_player_data_module.clear_statsbomb_player_events_when_disabled(FakeCursor(), Counter()) == {"deleted_player_events": 0}
 
 
 def test_execute_phase_sets_statement_timeout(monkeypatch):

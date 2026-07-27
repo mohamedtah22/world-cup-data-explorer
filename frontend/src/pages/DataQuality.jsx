@@ -23,17 +23,17 @@ export default function DataQuality() {
         <Metric label="Duplicates" value={metrics.duplicate_records} />
         <Metric label="Missing values" value={(metrics.missing_scores || 0) + (metrics.missing_stadiums || 0)} />
         <Metric label="Player aliases" value={metrics.player_aliases_resolved} />
-        <Metric label="StatsBomb players" value={metrics.players_with_statsbomb_coverage} />
+        <Metric label="StatsBomb assist players" value={metrics.players_with_statsbomb_coverage} />
       </div>
       <div className="cards">
         <Metric label="Unmatched players" value={metrics.unmatched_players} />
         <Metric label="Ambiguous matches" value={metrics.ambiguous_player_matches} />
-        <Metric label="No advanced coverage" value={metrics.players_without_advanced_coverage} />
+        <Metric label="No StatsBomb assists" value={metrics.players_without_advanced_coverage} />
         <Metric label="Record conflicts" value={(metrics.conflicting_goal_records || 0) + (metrics.conflicting_appearance_records || 0)} />
       </div>
       <article className="panel prose">
         <h2>Coverage</h2>
-        <p>Historical player data: Fjelstul, men&apos;s World Cups through 2022 when canonical matches link successfully. 2026 player appearances: ESPN public match summaries cached locally. 2026 matches and most goals: OpenFootball, with ESPN used only to fill missing completed 2026 scores and goal events. Advanced event data: StatsBomb Open Data, selected available World Cup seasons only.</p>
+        <p>Historical player data: Fjelstul, men&apos;s World Cups through 2022 when canonical matches link successfully. 2026 player appearances, starts, goals, and assists: ESPN public match summaries cached locally. 2026 matches and most goals: OpenFootball, with ESPN used only to fill missing completed 2026 scores and goal events. StatsBomb Open Data is used only for goal assists in selected available World Cup seasons.</p>
       </article>
       <article className="panel prose">
         <h2>Entity resolution and duplicate prevention</h2>

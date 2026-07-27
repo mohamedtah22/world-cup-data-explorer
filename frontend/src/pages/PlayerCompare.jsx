@@ -35,22 +35,19 @@ export default function PlayerCompare() {
 }
 
 function Card({ row }) {
-  const advanced = row.advanced_statistics;
   return (
     <article className="panel compare-card">
       <h2>{row.player}</h2>
       <div className="mini-grid">
         <span>Appearances <b>{row.appearances}</b></span>
         <span>Starts <b>{row.starts}</b></span>
+        <span>Sub apps <b>{row.substitute_appearances}</b></span>
         <span>Minutes <b>{row.minutes_played ?? "Unavailable"}</b></span>
         <span>Goals <b>{row.goals}</b></span>
         <span>Goals/match <b>{row.goals_per_match ?? "N/A"}</b></span>
         <span>Penalty goals <b>{row.penalty_goals}</b></span>
-        <span>Yellow cards <b>{row.yellow_cards}</b></span>
-        <span>Red cards <b>{row.red_cards}</b></span>
+        <span>Assists <b>{row.assists}</b></span>
       </div>
-      <h3>Advanced event statistics</h3>
-      {advanced ? <p>Shots {advanced.shots ?? "N/A"}, pass completion {advanced.pass_completion ?? "N/A"}%, tackles {advanced.tackles ?? "N/A"}, interceptions {advanced.interceptions ?? "N/A"}.</p> : <p>Unavailable for this player.</p>}
     </article>
   );
 }

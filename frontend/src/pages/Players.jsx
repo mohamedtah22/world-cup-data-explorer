@@ -37,9 +37,10 @@ export default function Players() {
     { key: "preferred_position", label: "Position", render: (row) => row.preferred_position || "N/A" },
     { key: "appearances", label: "Apps" },
     { key: "starts", label: "Starts" },
+    { key: "substitute_appearances", label: "Sub apps" },
     { key: "goals", label: "Goals" },
+    { key: "assists", label: "Assists" },
     { key: "goals_per_match", label: "G/Match", render: (row) => row.goals_per_match ?? "N/A" },
-    { key: "advanced_data_available", label: "Advanced", render: (row) => row.advanced_data_available ? <span className="badge">StatsBomb</span> : <span className="muted">Unavailable</span> },
   ];
 
   return (
@@ -69,7 +70,7 @@ export default function Players() {
 
 function PlayerDetailPanel({ detail }) {
   if (!detail) {
-    return <aside className="detail-panel"><h2>Player details</h2><p>Select a player to view World Cup profile, tournaments, matches, cards, goals, and data-source coverage.</p></aside>;
+    return <aside className="detail-panel"><h2>Player details</h2><p>Select a player to view World Cup appearances, starts, minutes, goals, penalty goals, assists, and data-source coverage.</p></aside>;
   }
   const p = detail.profile;
   return (
@@ -82,16 +83,13 @@ function PlayerDetailPanel({ detail }) {
         <span>Minutes <b>{p.minutes_played ?? "N/A"}</b></span>
         <span>Goals <b>{p.goals}</b></span>
         <span>Penalty goals <b>{p.penalty_goals}</b></span>
-        <span>Yellow cards <b>{p.yellow_cards}</b></span>
-        <span>Red cards <b>{p.red_cards}</b></span>
+        <span>Assists <b>{p.assists}</b></span>
       </div>
       <h3>Tournaments</h3>
       <div className="chip-list">{detail.tournaments.map((row) => <span key={`${row.year}-${row.team}`}>{row.year} {row.team}: {row.goals} goals</span>)}</div>
-      <h3>Advanced statistics</h3>
-      {detail.advanced_statistics.length ? detail.advanced_statistics.map((row) => <p key={row.source_id}>StatsBomb: {row.shots ?? "N/A"} shots, {row.pass_completion ?? "N/A"}% pass completion, {row.tackles ?? "N/A"} tackles</p>) : <p>Advanced event statistics unavailable for this player.</p>}
       <h3>Recent match history</h3>
       <div className="history">
-        {detail.match_history.slice(0, 8).map((match) => <p key={match.match_id}><b>{match.year}</b> {match.home_team} {match.home_score}:{match.away_score} {match.away_team} · {match.goals || 0} goals</p>)}
+        {detail.match_history.slice(0, 8).map((match) => <p key={match.match_id}><b>{match.year}</b> {match.home_team} {match.home_score}:{match.away_score} {match.away_team} · {match.goals || 0} goals · {match.assists || 0} assists</p>)}
       </div>
     </aside>
   );

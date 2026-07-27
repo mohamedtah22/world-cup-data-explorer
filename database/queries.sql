@@ -148,25 +148,27 @@ ORDER BY teams_represented DESC, player;
 SELECT p.player_id, p.canonical_name AS player,
        COUNT(DISTINCT pa.appearance_id)::int AS appearances,
        COALESCE(SUM((pa.started IS TRUE)::int), 0)::int AS starts,
+       COUNT(DISTINCT pa.appearance_id) FILTER (WHERE pa.started IS FALSE)::int AS substitute_appearances,
+       SUM(pa.minutes_played)::int AS minutes_played,
        COUNT(DISTINCT g.goal_id)::int AS goals,
-       COUNT(DISTINCT b.booking_id) FILTER (WHERE b.card_type IN ('yellow', 'second_yellow'))::int AS yellow_cards,
-       COUNT(DISTINCT b.booking_id) FILTER (WHERE b.card_type IN ('red', 'second_yellow'))::int AS red_cards
+       COALESCE(SUM(s.assists), 0)::int AS assists
 FROM players p
 LEFT JOIN player_appearances pa ON pa.player_id = p.player_id
 LEFT JOIN goals g ON g.player_id = p.player_id AND NOT g.is_own_goal
-LEFT JOIN bookings b ON b.player_id = p.player_id
+LEFT JOIN player_match_stats s ON s.player_id = p.player_id AND s.match_id = pa.match_id AND s.assists IS NOT NULL
 WHERE p.player_id IN (1, 2)
 GROUP BY p.player_id;
 
--- 14. Advanced statistics coverage
-SELECT tr.year, COUNT(DISTINCT s.match_id)::int AS covered_matches,
+-- 14. StatsBomb goal-assist coverage
+SELECT tr.year,
+       COUNT(DISTINCT s.match_id)::int AS covered_matches,
        COUNT(DISTINCT s.player_id)::int AS covered_players,
-       SUM(s.shots)::int AS shots,
-       ROUND(100.0 * SUM(s.passes_completed) / NULLIF(SUM(s.passes_attempted), 0), 1) AS pass_completion
+       SUM(s.assists)::int AS assists
 FROM player_match_stats s
 JOIN matches m ON m.match_id = s.match_id
 JOIN tournaments tr ON tr.tournament_id = m.tournament_id
 WHERE s.source_id = 'statsbomb'
+  AND s.assists IS NOT NULL
 GROUP BY tr.year
 ORDER BY tr.year;
 

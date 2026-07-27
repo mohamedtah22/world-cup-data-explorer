@@ -27,23 +27,23 @@ export default function PlayerLeaderboards() {
         <Board title="Top scorers" rows={data.goals} value="goals" />
         <Board title="Most appearances" rows={data.appearances} value="appearances" />
         <Board title="Most starts" rows={data.starts} value="starts" />
+        <Board title="Most substitute appearances" rows={data.substitute_appearances} value="substitute_appearances" />
+        <Board title="Most minutes" rows={data.minutes_played} value="minutes_played" />
         <Board title="Goals per match" rows={data.goals_per_match} value="goals_per_match" />
-        <Board title="Yellow cards" rows={data.yellow_cards} value="yellow_cards" />
-        <Board title="Red cards" rows={data.red_cards} value="red_cards" />
-        <Board title="StatsBomb advanced coverage" rows={data.advanced} value="shots" subValue="pass_completion" />
+        <Board title="Most assists" rows={data.assists} value="assists" />
       </div>
     </div>
   );
 }
 
-function Board({ title, rows, value, subValue }) {
+function Board({ title, rows, value }) {
   return (
     <article className="panel">
       <h2>{title}</h2>
       <ol className="rank-list">
         {rows.map((row) => (
           <li key={`${title}-${row.player_id}`}>
-            <span><b>{row.player}</b>{subValue && <small>{row[subValue] ?? "N/A"}% pass completion</small>}</span>
+            <span><b>{row.player}</b></span>
             <strong>{row[value] ?? "N/A"}</strong>
           </li>
         ))}

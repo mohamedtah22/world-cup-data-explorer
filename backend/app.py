@@ -285,17 +285,11 @@ def player_totals_sql(where_tail=""):
       WHERE player_id IS NOT NULL AND NOT is_own_goal
       GROUP BY player_id
     ),
-    cards AS (
+    assists AS (
       SELECT player_id,
-             COALESCE(SUM(CASE WHEN card_type IN ('yellow', 'second_yellow') THEN 1 ELSE 0 END), 0)::int AS yellow_cards,
-             COALESCE(SUM(CASE WHEN card_type IN ('red', 'second_yellow') THEN 1 ELSE 0 END), 0)::int AS red_cards
-      FROM bookings
-      GROUP BY player_id
-    ),
-    advanced AS (
-      SELECT player_id, TRUE AS advanced_data_available
+             COALESCE(SUM(assists), 0)::int AS assists
       FROM player_match_stats
-      WHERE source_id = 'statsbomb'
+      WHERE assists IS NOT NULL
       GROUP BY player_id
     )
       SELECT
@@ -311,16 +305,13 @@ def player_totals_sql(where_tail=""):
         COALESCE(t.tournament_appearances, 0) AS tournament_appearances,
         COALESCE(g.goals, 0) AS goals,
         COALESCE(g.penalty_goals, 0) AS penalty_goals,
-        COALESCE(c.yellow_cards, 0) AS yellow_cards,
-        COALESCE(c.red_cards, 0) AS red_cards,
-        COALESCE(ad.advanced_data_available, FALSE) AS advanced_data_available,
+        COALESCE(ast.assists, 0) AS assists,
         ROUND(COALESCE(g.goals, 0)::numeric / NULLIF(a.appearances, 0), 3) AS goals_per_match
       FROM players p
       LEFT JOIN appearances a ON a.player_id = p.player_id
       LEFT JOIN tournaments t ON t.player_id = p.player_id
       LEFT JOIN goal_totals g ON g.player_id = p.player_id
-      LEFT JOIN cards c ON c.player_id = p.player_id
-      LEFT JOIN advanced ad ON ad.player_id = p.player_id
+      LEFT JOIN assists ast ON ast.player_id = p.player_id
     {where_tail}
     """
 
@@ -678,20 +669,6 @@ def top_scorers():
 def player_leaderboards():
     min_apps = int_arg("minimum_appearances", 5, 1, 100)
     top = lambda order: run_query(f"SELECT * FROM ({player_totals_sql()}) p ORDER BY {order} LIMIT 10")
-    advanced = run_query(
-        """
-        SELECT p.player_id, p.canonical_name AS player,
-               SUM(s.shots)::int AS shots,
-               ROUND(100.0 * SUM(s.passes_completed) / NULLIF(SUM(s.passes_attempted), 0), 1) AS pass_completion,
-               SUM(s.tackles)::int AS tackles
-        FROM player_match_stats s
-        JOIN players p ON p.player_id = s.player_id
-        WHERE s.source_id = 'statsbomb'
-        GROUP BY p.player_id
-        ORDER BY shots DESC NULLS LAST, player
-        LIMIT 10
-        """
-    )
     goals_per_match = run_query(
         f"""
         SELECT * FROM ({player_totals_sql()}) p
@@ -706,10 +683,10 @@ def player_leaderboards():
             "goals": top("goals DESC, player ASC"),
             "appearances": top("appearances DESC, player ASC"),
             "starts": top("starts DESC, player ASC"),
+            "substitute_appearances": top("substitute_appearances DESC, player ASC"),
+            "minutes_played": top("minutes_played DESC NULLS LAST, player ASC"),
             "goals_per_match": goals_per_match,
-            "yellow_cards": top("yellow_cards DESC, player ASC"),
-            "red_cards": top("red_cards DESC, player ASC"),
-            "advanced": advanced,
+            "assists": top("assists DESC, player ASC"),
         }
     )
 
@@ -748,23 +725,6 @@ def player_detail(player_id):
         (player_id,),
     )
     history = player_match_history(player_id, 1, 25)["results"]
-    advanced = run_query(
-        """
-        SELECT source_id,
-               SUM(shots)::int AS shots,
-               SUM(shots_on_target)::int AS shots_on_target,
-               SUM(passes_attempted)::int AS passes_attempted,
-               SUM(passes_completed)::int AS passes_completed,
-               ROUND(100.0 * SUM(passes_completed) / NULLIF(SUM(passes_attempted), 0), 1) AS pass_completion,
-               SUM(chances_created)::int AS chances_created,
-               SUM(tackles)::int AS tackles,
-               SUM(interceptions)::int AS interceptions
-        FROM player_match_stats
-        WHERE player_id = %s AND source_id = 'statsbomb'
-        GROUP BY source_id
-        """,
-        (player_id,),
-    )
     coverage = run_query(
         """
         SELECT source_id, source_name, dataset_name, coverage_year, match_count, notes
@@ -773,7 +733,7 @@ def player_detail(player_id):
         ORDER BY source_id, coverage_year NULLS FIRST, dataset_name
         """
     )
-    return jsonify({"profile": profile, "teams": teams, "tournaments": tournaments_rows, "match_history": history, "advanced_statistics": advanced, "coverage": coverage})
+    return jsonify({"profile": profile, "teams": teams, "tournaments": tournaments_rows, "match_history": history, "coverage": coverage})
 
 
 def player_match_history(player_id, page, limit):
@@ -783,9 +743,8 @@ def player_match_history(player_id, page, limit):
         SELECT m.match_id, tr.year, m.match_date, h.canonical_name AS home_team,
                a.canonical_name AS away_team, m.home_score, m.away_score,
                tm.canonical_name AS team, pa.started, pa.minutes_played,
-               fs.goals, fs.penalties_scored, fs.yellow_cards, fs.red_cards,
-               sb.shots, sb.shots_on_target, sb.passes_attempted, sb.passes_completed,
-               sb.chances_created, sb.tackles, sb.interceptions
+               fs.goals, fs.penalties_scored,
+               COALESCE(SUM(pms.assists), 0)::int AS assists
         FROM player_appearances pa
         JOIN matches m ON m.match_id = pa.match_id
         JOIN tournaments tr ON tr.tournament_id = m.tournament_id
@@ -793,8 +752,11 @@ def player_match_history(player_id, page, limit):
         JOIN teams a ON a.team_id = m.away_team_id
         JOIN teams tm ON tm.team_id = pa.team_id
         LEFT JOIN player_match_stats fs ON fs.player_id = pa.player_id AND fs.match_id = pa.match_id AND fs.source_id = 'fjelstul'
-        LEFT JOIN player_match_stats sb ON sb.player_id = pa.player_id AND sb.match_id = pa.match_id AND sb.source_id = 'statsbomb'
+        LEFT JOIN player_match_stats pms ON pms.player_id = pa.player_id AND pms.match_id = pa.match_id AND pms.assists IS NOT NULL
         WHERE pa.player_id = %s
+        GROUP BY m.match_id, tr.year, m.match_date, h.canonical_name, a.canonical_name,
+                 m.home_score, m.away_score, tm.canonical_name, pa.started, pa.minutes_played,
+                 fs.goals, fs.penalties_scored
         ORDER BY m.match_date DESC, m.match_id DESC
         LIMIT %s OFFSET %s
         """,
@@ -824,23 +786,6 @@ def compare_players():
     rows = run_query(f"SELECT * FROM ({player_totals_sql()}) p WHERE player_id IN (%s, %s)", (player1, player2))
     if len(rows) != 2:
         return response({"error": "not_found", "message": "One or both players were not found"}, 404)
-    advanced = run_query(
-        """
-        SELECT player_id,
-               SUM(shots)::int AS shots,
-               SUM(shots_on_target)::int AS shots_on_target,
-               ROUND(100.0 * SUM(passes_completed) / NULLIF(SUM(passes_attempted), 0), 1) AS pass_completion,
-               SUM(tackles)::int AS tackles,
-               SUM(interceptions)::int AS interceptions
-        FROM player_match_stats
-        WHERE source_id = 'statsbomb' AND player_id IN (%s, %s)
-        GROUP BY player_id
-        """,
-        (player1, player2),
-    )
-    advanced_by_player = {row["player_id"]: row for row in advanced}
-    for row in rows:
-        row["advanced_statistics"] = advanced_by_player.get(row["player_id"])
     by_id = {row["player_id"]: row for row in rows}
     return jsonify({"player1": by_id[player1], "player2": by_id[player2]})
 
