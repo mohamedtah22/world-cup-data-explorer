@@ -3,15 +3,18 @@ import os
 import subprocess
 import sys
 import shutil
+from collections import Counter
 from pathlib import Path
 
 import psycopg2
 import pytest
+import importlib
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from load_database import canonical_team_name, clean_records, duplicate_key, load_database
 from load_player_data import load_fjelstul
+load_player_data_module = importlib.import_module("load_player_data")
 
 
 def test_alias_normalization():
@@ -89,3 +92,102 @@ def test_fjelstul_goal_delete_is_scoped_to_linked_matches():
     constants = "\n".join(str(value) for value in load_fjelstul.__code__.co_consts)
     assert "source_goal_key NOT LIKE 'fjelstul:%%' AND match_id = ANY(%s)" in constants
     assert "DELETE FROM goals WHERE source_goal_key NOT LIKE 'fjelstul:%'" not in constants
+
+
+def test_player_loader_resume_skips_quality_issue_clear(monkeypatch):
+    phases = []
+
+    def fake_execute_phase(database_url, phase_name, phase_func, stats, resume=False):
+        phases.append((phase_name, resume))
+        return {}
+
+    monkeypatch.setattr(load_player_data_module, "execute_phase", fake_execute_phase)
+    monkeypatch.setattr(load_player_data_module, "statsbomb_coverages", lambda: [])
+
+    load_player_data_module.load_player_data(database_url="postgresql://example/db", resume=True)
+
+    assert "clear source quality issues" not in [phase for phase, _ in phases]
+    assert [phase for phase, _ in phases][:3] == [
+        "Fjelstul players and aliases",
+        "Fjelstul squads and match-player links",
+        "Fjelstul appearances, goals, bookings, and substitutions",
+    ]
+    assert all(resume for _, resume in phases)
+
+
+def test_phase_retry_reconnects_after_operational_error(monkeypatch):
+    attempts = {"count": 0}
+    sleeps = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeConnection:
+        closed = 0
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            self.closed = 1
+
+    def flaky_phase(cursor, stats):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise psycopg2.OperationalError("server closed the connection unexpectedly")
+        return {"rows": 2}
+
+    monkeypatch.setattr(load_player_data_module, "connect", lambda database_url: FakeConnection())
+    monkeypatch.setattr(load_player_data_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = load_player_data_module.execute_phase("postgresql://example/db", "test phase", flaky_phase, Counter())
+
+    assert result == {"rows": 2}
+    assert attempts["count"] == 2
+    assert sleeps == [1]
+
+
+def test_fjelstul_players_and_aliases_use_bulk_batches(monkeypatch):
+    calls = []
+
+    class FakeCursor:
+        def __init__(self):
+            self._results = []
+
+        def execute(self, sql, params=()):
+            assert "WHERE external_fjelstul_id = ANY" in sql
+            self._results = [(external_id, index + 1) for index, external_id in enumerate(params[0])]
+
+        def fetchall(self):
+            return self._results
+
+    def fake_execute_values(cursor, sql, rows, page_size=None, template=None):
+        calls.append((sql, list(rows), page_size))
+
+    rows = [
+        {"player_id": "p1", "given_name": "Alpha", "family_name": "One", "birth_date": "1990-01-01", "forward": "1"},
+        {"player_id": "p2", "given_name": "Beta", "family_name": "Two", "birth_date": "", "defender": "1"},
+    ]
+
+    monkeypatch.setattr(load_player_data_module, "execute_values", fake_execute_values)
+
+    player_ids, counts = load_player_data_module.load_fjelstul_players_and_aliases(FakeCursor(), rows)
+
+    assert player_ids == {"p1": 1, "p2": 2}
+    assert counts == {"players": 2, "aliases": 2}
+    assert len(calls) == 2
+    assert all(call[2] == load_player_data_module.BATCH_SIZE for call in calls)
+
+
+def test_statsbomb_raw_event_json_is_off_by_default():
+    assert load_player_data_module.STORE_RAW_EVENT_JSON is False

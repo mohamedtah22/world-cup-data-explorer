@@ -1,14 +1,16 @@
+import argparse
 import csv
 import json
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
 import psycopg2
 from dotenv import load_dotenv
-from psycopg2.extras import Json, execute_batch
+from psycopg2.extras import Json, execute_batch, execute_values
 
 from load_database import canonical_team_name, fetch_id, normalize_person_name, upsert_player, upsert_team
 
@@ -20,6 +22,83 @@ METADATA_FILE = ROOT / "data" / "raw" / "source_metadata.json"
 PLAYER_CANONICAL_ALIASES = {
     "lionel andrés messi cuccittini": "lionel messi",
 }
+BATCH_SIZE = int(os.getenv("PLAYER_LOAD_BATCH_SIZE", "1000"))
+MAX_PHASE_ATTEMPTS = 3
+STORE_RAW_EVENT_JSON = os.getenv("STORE_RAW_EVENT_JSON", "false").casefold() in {"1", "true", "yes", "on"}
+
+
+def progress(message):
+    print(f"[load_player_data] {message}", flush=True)
+
+
+def connect(database_url):
+    return psycopg2.connect(
+        database_url,
+        connect_timeout=int(os.getenv("PGCONNECT_TIMEOUT", "15")),
+        keepalives=1,
+        keepalives_idle=int(os.getenv("PGKEEPALIVES_IDLE", "30")),
+        keepalives_interval=int(os.getenv("PGKEEPALIVES_INTERVAL", "10")),
+        keepalives_count=int(os.getenv("PGKEEPALIVES_COUNT", "5")),
+    )
+
+
+def safe_close(connection):
+    if not connection:
+        return
+    try:
+        if not connection.closed:
+            connection.close()
+    except psycopg2.InterfaceError:
+        pass
+
+
+def safe_rollback(connection):
+    if not connection:
+        return
+    try:
+        if not connection.closed:
+            connection.rollback()
+    except psycopg2.InterfaceError:
+        pass
+
+
+def execute_phase(database_url, phase_name, phase_func, stats, resume=False):
+    for attempt in range(1, MAX_PHASE_ATTEMPTS + 1):
+        connection = None
+        try:
+            progress(f"starting phase: {phase_name} (attempt {attempt}/{MAX_PHASE_ATTEMPTS})")
+            connection = connect(database_url)
+            with connection.cursor() as cursor:
+                result = phase_func(cursor, stats)
+            connection.commit()
+            progress(f"completed phase: {phase_name}; {format_phase_counts(result)}")
+            return result
+        except psycopg2.OperationalError as exc:
+            safe_rollback(connection)
+            safe_close(connection)
+            if attempt >= MAX_PHASE_ATTEMPTS:
+                progress(f"failed phase after retries: {phase_name}: {exc}")
+                raise
+            delay = 2 ** (attempt - 1)
+            progress(f"database connection lost in phase {phase_name}; retrying in {delay}s")
+            time.sleep(delay)
+        except Exception:
+            safe_rollback(connection)
+            safe_close(connection)
+            raise
+        finally:
+            safe_close(connection)
+
+
+def format_phase_counts(result):
+    if not result:
+        return "0 rows"
+    return ", ".join(f"{key}={value}" for key, value in sorted(result.items()))
+
+
+def chunks(rows, size=BATCH_SIZE):
+    for index in range(0, len(rows), size):
+        yield index, rows[index : index + size]
 
 
 def read_csv(name):
@@ -128,9 +207,31 @@ def record_issue(cursor, source_id, issue_type, description, entity_type=None, e
     cursor.execute(
         """
         INSERT INTO data_quality_issues (source_id, issue_type, severity, entity_type, external_id, description, raw_payload)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        SELECT %s, %s, %s, %s, %s, %s, %s
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM data_quality_issues
+          WHERE source_id = %s
+            AND issue_type = %s
+            AND COALESCE(entity_type, '') = COALESCE(%s, '')
+            AND COALESCE(external_id, '') = COALESCE(%s, '')
+            AND description = %s
+        )
         """,
-        (source_id, issue_type, severity, entity_type, external_id, description, Json(raw_payload) if raw_payload is not None else None),
+        (
+            source_id,
+            issue_type,
+            severity,
+            entity_type,
+            external_id,
+            description,
+            Json(raw_payload) if raw_payload is not None else None,
+            source_id,
+            issue_type,
+            entity_type,
+            external_id,
+            description,
+        ),
     )
 
 
@@ -158,7 +259,80 @@ def match_key_for_fjelstul(row):
     return year, row.get("match_date"), home, away
 
 
-def load_fjelstul(cursor, stats):
+def preferred_position(row):
+    for flag, label in (("goal_keeper", "Goalkeeper"), ("defender", "Defender"), ("midfielder", "Midfielder"), ("forward", "Forward")):
+        if parse_bool(row.get(flag)):
+            return label
+    return None
+
+
+def load_fjelstul_players_and_aliases(cursor, rows):
+    player_rows = [
+        (
+            player_name(row),
+            parse_date(row.get("birth_date")),
+            preferred_position(row),
+            row["player_id"],
+        )
+        for row in rows
+        if row.get("player_id")
+    ]
+    for batch_index, batch in chunks(player_rows):
+        execute_values(
+            cursor,
+            """
+            INSERT INTO players (canonical_name, birth_date, preferred_position, external_fjelstul_id)
+            VALUES %s
+            ON CONFLICT (external_fjelstul_id) DO UPDATE SET
+              canonical_name = EXCLUDED.canonical_name,
+              birth_date = COALESCE(EXCLUDED.birth_date, players.birth_date),
+              preferred_position = COALESCE(EXCLUDED.preferred_position, players.preferred_position)
+            """,
+            batch,
+            page_size=BATCH_SIZE,
+        )
+        progress(f"fjelstul players batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} players")
+
+    external_ids = [row[3] for row in player_rows]
+    player_ids = {}
+    if external_ids:
+        cursor.execute(
+            "SELECT external_fjelstul_id, player_id FROM players WHERE external_fjelstul_id = ANY(%s)",
+            (external_ids,),
+        )
+        player_ids = {external_id: player_id for external_id, player_id in cursor.fetchall()}
+
+    alias_rows = [
+        (player_ids[row["player_id"]], "fjelstul", player_name(row), normalize_person_name(player_name(row)))
+        for row in rows
+        if row.get("player_id") in player_ids
+    ]
+    for batch_index, batch in chunks(alias_rows):
+        execute_values(
+            cursor,
+            """
+            INSERT INTO player_aliases (player_id, source_id, original_name, normalized_name)
+            VALUES %s
+            ON CONFLICT (source_id, normalized_name, player_id) DO NOTHING
+            """,
+            batch,
+            page_size=BATCH_SIZE,
+        )
+        progress(f"fjelstul aliases batch {batch_index // BATCH_SIZE + 1}: inserted/upserted {len(batch)} aliases")
+    return player_ids, {"players": len(player_rows), "aliases": len(alias_rows)}
+
+
+def fetch_fjelstul_player_ids(cursor):
+    cursor.execute("SELECT external_fjelstul_id, player_id FROM players WHERE external_fjelstul_id IS NOT NULL")
+    return {external_id: player_id for external_id, player_id in cursor.fetchall()}
+
+
+def fetch_fjelstul_match_ids(cursor):
+    cursor.execute("SELECT external_fjelstul_id, match_id FROM matches WHERE external_fjelstul_id IS NOT NULL")
+    return {external_id: match_id for external_id, match_id in cursor.fetchall()}
+
+
+def load_fjelstul(cursor, stats, phase="all"):
     players = read_csv("players")
     squads = read_csv("squads")
     appearances = read_csv("player_appearances")
@@ -171,80 +345,95 @@ def load_fjelstul(cursor, stats):
     award_winners = read_csv("award_winners")
 
     tournaments, teams, match_map = load_maps(cursor)
-    player_ids = {}
     mens_match_source_ids = {row.get("match_id") for row in matches if is_mens_world_cup(row)}
     dependent_appearances = Counter(row.get("match_id") for row in appearances if row.get("match_id") in mens_match_source_ids)
+    if phase in {"all", "players"}:
+        player_ids, player_counts = load_fjelstul_players_and_aliases(cursor, players)
+        stats.update({f"fjelstul_{key}": value for key, value in player_counts.items()})
+        if phase == "players":
+            return player_counts
+    else:
+        player_ids = fetch_fjelstul_player_ids(cursor)
+        player_counts = {"players": len(player_ids), "aliases": 0}
 
-    for row in players:
-        pid = upsert_player(cursor, player_name(row), external_fjelstul_id=row["player_id"])
-        player_ids[row["player_id"]] = pid
-        preferred = None
-        for flag, label in (("goal_keeper", "Goalkeeper"), ("defender", "Defender"), ("midfielder", "Midfielder"), ("forward", "Forward")):
-            if parse_bool(row.get(flag)):
-                preferred = label
-                break
-        cursor.execute(
-            """
-            UPDATE players
-            SET birth_date = COALESCE(%s, birth_date),
-                preferred_position = COALESCE(%s, preferred_position)
-            WHERE player_id = %s
-            """,
-            (parse_date(row.get("birth_date")), preferred, pid),
-        )
-        insert_alias(cursor, pid, "fjelstul", player_name(row))
-
-    for row in squads:
-        if not is_mens_world_cup(row):
-            continue
-        year = tournament_year(row)
-        if year not in tournaments:
-            continue
-        team_name = canonical_team_name(row.get("team_name"))
-        team_id = teams.get(team_name) or upsert_team(cursor, team_name)
-        teams[team_name] = team_id
-        pid = player_ids.get(row["player_id"])
-        if not pid:
-            continue
-        cursor.execute(
-            """
-            INSERT INTO player_tournaments (player_id, tournament_id, team_id, shirt_number, position, squad_status)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (player_id, tournament_id, team_id) DO UPDATE SET
-              shirt_number = EXCLUDED.shirt_number,
-              position = EXCLUDED.position,
-              squad_status = EXCLUDED.squad_status
-            """,
-            (pid, tournaments[year], team_id, parse_int(row.get("shirt_number")), clean_text(row.get("position_name")), "squad"),
-        )
-
+    squad_rows = []
     fjelstul_match_ids = {}
-    for row in matches:
-        if row.get("match_id") not in mens_match_source_ids:
-            continue
-        key = match_key_for_fjelstul(row)
-        match_id, reversed_teams, shifted_date = find_match(match_map, *key)
-        if match_id:
-            fjelstul_match_ids[row["match_id"]] = match_id
-            cursor.execute("UPDATE matches SET external_fjelstul_id = %s WHERE match_id = %s", (row["match_id"], match_id))
-            if reversed_teams:
-                record_issue(
-                    cursor,
-                    "fjelstul",
-                    "reversed_match_link_resolved",
-                    "Linked Fjelstul match after detecting reversed home/away teams",
-                    "match",
-                    row.get("match_id"),
-                    row,
-                    severity="info",
-                )
-            if shifted_date:
-                record_issue(cursor, "fjelstul", "date_shift_match_link_resolved", "Linked Fjelstul match after adjacent-date normalization", "match", row.get("match_id"), row, severity="info")
-        else:
-            skipped = dependent_appearances.get(row.get("match_id"), 0)
-            stats["unmatched_fjelstul_matches"] += 1
-            stats["skipped_fjelstul_appearances"] += skipped
-            record_issue(cursor, "fjelstul", "unmatched_match", f"Could not link Fjelstul match to canonical match; {skipped} dependent appearances skipped", "match", row.get("match_id"), row)
+    match_link_rows = []
+    if phase in {"all", "squads_links"}:
+        for row in squads:
+            if not is_mens_world_cup(row):
+                continue
+            year = tournament_year(row)
+            if year not in tournaments:
+                continue
+            team_name = canonical_team_name(row.get("team_name"))
+            team_id = teams.get(team_name) or upsert_team(cursor, team_name)
+            teams[team_name] = team_id
+            pid = player_ids.get(row["player_id"])
+            if not pid:
+                continue
+            squad_rows.append((pid, tournaments[year], team_id, parse_int(row.get("shirt_number")), clean_text(row.get("position_name")), "squad"))
+        for batch_index, batch in chunks(squad_rows):
+            execute_values(
+                cursor,
+                """
+                INSERT INTO player_tournaments (player_id, tournament_id, team_id, shirt_number, position, squad_status)
+                VALUES %s
+                ON CONFLICT (player_id, tournament_id, team_id) DO UPDATE SET
+                  shirt_number = EXCLUDED.shirt_number,
+                  position = EXCLUDED.position,
+                  squad_status = EXCLUDED.squad_status
+                """,
+                batch,
+                page_size=BATCH_SIZE,
+            )
+            progress(f"fjelstul squads batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} tournament rows")
+        stats["fjelstul_squad_rows"] += len(squad_rows)
+
+        for row in matches:
+            if row.get("match_id") not in mens_match_source_ids:
+                continue
+            key = match_key_for_fjelstul(row)
+            match_id, reversed_teams, shifted_date = find_match(match_map, *key)
+            if match_id:
+                fjelstul_match_ids[row["match_id"]] = match_id
+                match_link_rows.append((row["match_id"], match_id))
+                if reversed_teams:
+                    record_issue(
+                        cursor,
+                        "fjelstul",
+                        "reversed_match_link_resolved",
+                        "Linked Fjelstul match after detecting reversed home/away teams",
+                        "match",
+                        row.get("match_id"),
+                        row,
+                        severity="info",
+                    )
+                if shifted_date:
+                    record_issue(cursor, "fjelstul", "date_shift_match_link_resolved", "Linked Fjelstul match after adjacent-date normalization", "match", row.get("match_id"), row, severity="info")
+            else:
+                skipped = dependent_appearances.get(row.get("match_id"), 0)
+                stats["unmatched_fjelstul_matches"] += 1
+                stats["skipped_fjelstul_appearances"] += skipped
+                record_issue(cursor, "fjelstul", "unmatched_match", f"Could not link Fjelstul match to canonical match; {skipped} dependent appearances skipped", "match", row.get("match_id"), row)
+        if match_link_rows:
+            execute_values(
+                cursor,
+                """
+                UPDATE matches AS m
+                SET external_fjelstul_id = v.external_fjelstul_id
+                FROM (VALUES %s) AS v(external_fjelstul_id, match_id)
+                WHERE m.match_id = v.match_id
+                """,
+                match_link_rows,
+                page_size=BATCH_SIZE,
+            )
+            progress(f"fjelstul match links: updated {len(match_link_rows)} canonical matches")
+        stats["fjelstul_linked_matches"] += len(match_link_rows)
+        if phase == "squads_links":
+            return {"squads": len(squad_rows), "matches": len(match_link_rows)}
+    else:
+        fjelstul_match_ids = fetch_fjelstul_match_ids(cursor)
 
     goal_counts = Counter()
     penalty_counts = Counter()
@@ -259,6 +448,7 @@ def load_fjelstul(cursor, stats):
             (linked_canonical_ids,),
         )
 
+    goal_rows = []
     for row in goals:
         if row.get("match_id") not in mens_match_source_ids:
             continue
@@ -273,11 +463,26 @@ def load_fjelstul(cursor, stats):
         goal_counts[(player_id, match_id)] += 1
         if parse_bool(row.get("penalty")):
             penalty_counts[(player_id, match_id)] += 1
-        cursor.execute(
+        goal_rows.append(
+            (
+                f"fjelstul:{row['goal_id']}",
+                match_id,
+                player_id,
+                team_id,
+                parse_int(row.get("minute_regulation")),
+                parse_int(row.get("minute_stoppage")),
+                parse_bool(row.get("penalty")),
+                parse_bool(row.get("own_goal")),
+            )
+        )
+    for batch_index, batch in chunks(goal_rows):
+        execute_values(
+            cursor,
             """
             INSERT INTO goals (source_goal_key, match_id, player_id, team_id, tournament_id, minute, stoppage_minute, is_penalty, is_own_goal)
-            SELECT %s, %s, %s, %s, m.tournament_id, %s, %s, %s, %s
-            FROM matches m WHERE m.match_id = %s
+            SELECT v.source_goal_key, v.match_id, v.player_id, v.team_id, m.tournament_id, v.minute, v.stoppage_minute, v.is_penalty, v.is_own_goal
+            FROM (VALUES %s) AS v(source_goal_key, match_id, player_id, team_id, minute, stoppage_minute, is_penalty, is_own_goal)
+            JOIN matches m ON m.match_id = v.match_id
             ON CONFLICT (source_goal_key) DO UPDATE SET
               match_id = EXCLUDED.match_id,
               player_id = EXCLUDED.player_id,
@@ -288,18 +493,11 @@ def load_fjelstul(cursor, stats):
               is_penalty = EXCLUDED.is_penalty,
               is_own_goal = EXCLUDED.is_own_goal
             """,
-            (
-                f"fjelstul:{row['goal_id']}",
-                match_id,
-                player_id,
-                team_id,
-                parse_int(row.get("minute_regulation")),
-                parse_int(row.get("minute_stoppage")),
-                parse_bool(row.get("penalty")),
-                parse_bool(row.get("own_goal")),
-                match_id,
-            ),
+            batch,
+            page_size=BATCH_SIZE,
         )
+        progress(f"fjelstul goals batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} goals")
+    stats["fjelstul_goal_rows"] += len(goal_rows)
 
     for row in penalty_kicks:
         if row.get("match_id") not in mens_match_source_ids:
@@ -310,6 +508,7 @@ def load_fjelstul(cursor, stats):
             if match_id and player_id:
                 penalty_counts[(player_id, match_id)] += 1
 
+    booking_rows = []
     for row in bookings:
         if row.get("match_id") not in mens_match_source_ids:
             continue
@@ -322,16 +521,23 @@ def load_fjelstul(cursor, stats):
             continue
         card_type = "second_yellow" if parse_bool(row.get("second_yellow_card")) else ("red" if parse_bool(row.get("red_card")) else "yellow")
         card_counts[(player_id, match_id, card_type)] += 1
-        cursor.execute(
+        booking_rows.append((row["booking_id"], match_id, player_id, team_id, parse_int(row.get("minute_regulation")), card_type, "fjelstul"))
+    for batch_index, batch in chunks(booking_rows):
+        execute_values(
+            cursor,
             """
             INSERT INTO bookings (external_booking_id, match_id, player_id, team_id, minute, card_type, source_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT (source_id, external_booking_id) DO NOTHING
             """,
-            (row["booking_id"], match_id, player_id, team_id, parse_int(row.get("minute_regulation")), card_type, "fjelstul"),
+            batch,
+            page_size=BATCH_SIZE,
         )
+        progress(f"fjelstul bookings batch {batch_index // BATCH_SIZE + 1}: inserted/upserted {len(batch)} bookings")
+    stats["fjelstul_booking_rows"] += len(booking_rows)
 
-    appearance_rows = {}
+    appearance_rows = []
+    stat_rows = []
     for row in appearances:
         if row.get("match_id") not in mens_match_source_ids:
             continue
@@ -344,30 +550,8 @@ def load_fjelstul(cursor, stats):
             record_issue(cursor, "fjelstul", "unmatched_appearance_player", "Could not link appearance to canonical player/match/team", "appearance", row.get("key_id"), row)
             continue
         started = parse_bool(row.get("starter"))
-        cursor.execute(
-            """
-            INSERT INTO player_appearances (player_id, match_id, team_id, started, goalkeeper, source_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (player_id, match_id, team_id, source_id) DO UPDATE SET
-              started = EXCLUDED.started,
-              goalkeeper = EXCLUDED.goalkeeper
-            """,
-            (player_id, match_id, team_id, started, clean_text(row.get("position_name")) == "goalkeeper", "fjelstul"),
-        )
-        appearance_rows[(player_id, match_id)] = True
-        cursor.execute(
-            """
-            INSERT INTO player_match_stats (
-              player_id, match_id, minutes_played, goals, penalties_scored,
-              yellow_cards, red_cards, source_id
-            )
-            VALUES (%s, %s, NULL, %s, %s, %s, %s, %s)
-            ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
-              goals = EXCLUDED.goals,
-              penalties_scored = EXCLUDED.penalties_scored,
-              yellow_cards = EXCLUDED.yellow_cards,
-              red_cards = EXCLUDED.red_cards
-            """,
+        appearance_rows.append((player_id, match_id, team_id, started, clean_text(row.get("position_name")) == "goalkeeper", "fjelstul"))
+        stat_rows.append(
             (
                 player_id,
                 match_id,
@@ -376,9 +560,47 @@ def load_fjelstul(cursor, stats):
                 card_counts.get((player_id, match_id, "yellow"), 0) + card_counts.get((player_id, match_id, "second_yellow"), 0),
                 card_counts.get((player_id, match_id, "red"), 0) + card_counts.get((player_id, match_id, "second_yellow"), 0),
                 "fjelstul",
-            ),
+            )
         )
+    for batch_index, batch in chunks(appearance_rows):
+        execute_values(
+            cursor,
+            """
+            INSERT INTO player_appearances (player_id, match_id, team_id, started, goalkeeper, source_id)
+            VALUES %s
+            ON CONFLICT (player_id, match_id, team_id, source_id) DO UPDATE SET
+              started = EXCLUDED.started,
+              goalkeeper = EXCLUDED.goalkeeper
+            """,
+            batch,
+            page_size=BATCH_SIZE,
+        )
+        progress(f"fjelstul appearances batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} appearances")
+    for batch_index, batch in chunks(stat_rows):
+        execute_values(
+            cursor,
+            """
+            INSERT INTO player_match_stats (
+              player_id, match_id, minutes_played, goals, penalties_scored,
+              yellow_cards, red_cards, source_id
+            )
+            VALUES %s
+            ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
+              goals = EXCLUDED.goals,
+              penalties_scored = EXCLUDED.penalties_scored,
+              yellow_cards = EXCLUDED.yellow_cards,
+              red_cards = EXCLUDED.red_cards
+            """,
+            batch,
+            template="(%s, %s, NULL, %s, %s, %s, %s, %s)",
+            page_size=BATCH_SIZE,
+        )
+        progress(f"fjelstul player stats batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} stat rows")
+    stats["fjelstul_appearance_rows"] += len(appearance_rows)
+    stats["fjelstul_match_stat_rows"] += len(stat_rows)
 
+    substitution_rows = []
+    appearance_minute_updates = []
     for row in substitutions:
         if row.get("match_id") not in mens_match_source_ids:
             continue
@@ -390,45 +612,80 @@ def load_fjelstul(cursor, stats):
             continue
         out_id = player_id if parse_bool(row.get("going_off")) else None
         in_id = player_id if parse_bool(row.get("coming_on")) else None
-        cursor.execute(
+        minute = parse_int(row.get("minute_regulation"))
+        substitution_rows.append((row["substitution_id"], match_id, team_id, out_id, in_id, minute, "fjelstul"))
+        if in_id:
+            appearance_minute_updates.append((minute, None, player_id, match_id, team_id))
+        if out_id:
+            appearance_minute_updates.append((None, minute, player_id, match_id, team_id))
+    for batch_index, batch in chunks(substitution_rows):
+        execute_values(
+            cursor,
             """
             INSERT INTO substitutions (external_substitution_id, match_id, team_id, player_out_id, player_in_id, minute, source_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT DO NOTHING
             """,
-            (row["substitution_id"], match_id, team_id, out_id, in_id, parse_int(row.get("minute_regulation")), "fjelstul"),
+            batch,
+            page_size=BATCH_SIZE,
         )
-        if in_id:
-            cursor.execute(
-                "UPDATE player_appearances SET entered_minute = %s WHERE player_id = %s AND match_id = %s AND team_id = %s",
-                (parse_int(row.get("minute_regulation")), player_id, match_id, team_id),
-            )
-        if out_id:
-            cursor.execute(
-                "UPDATE player_appearances SET exited_minute = %s WHERE player_id = %s AND match_id = %s AND team_id = %s",
-                (parse_int(row.get("minute_regulation")), player_id, match_id, team_id),
-            )
-
-    for dataset, rows in (
-        ("players", players),
-        ("squads", squads),
-        ("player_appearances", appearances),
-        ("goals", goals),
-        ("penalty_kicks", penalty_kicks),
-        ("bookings", bookings),
-        ("substitutions", substitutions),
-        ("awards", awards),
-        ("award_winners", award_winners),
-    ):
-        cursor.execute(
+        progress(f"fjelstul substitutions batch {batch_index // BATCH_SIZE + 1}: inserted/upserted {len(batch)} substitutions")
+    for batch_index, batch in chunks(appearance_minute_updates):
+        execute_values(
+            cursor,
             """
-            INSERT INTO source_metadata (source_id, source_name, dataset_name, match_count, file_path, notes)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_id, dataset_name, COALESCE(coverage_year, 0), COALESCE(competition_id, 0), COALESCE(season_id, 0))
-            DO UPDATE SET match_count = EXCLUDED.match_count, file_path = EXCLUDED.file_path, downloaded_at = NOW()
+            UPDATE player_appearances AS pa
+            SET entered_minute = COALESCE(v.entered_minute, pa.entered_minute),
+                exited_minute = COALESCE(v.exited_minute, pa.exited_minute)
+            FROM (VALUES %s) AS v(entered_minute, exited_minute, player_id, match_id, team_id)
+            WHERE pa.player_id = v.player_id
+              AND pa.match_id = v.match_id
+              AND pa.team_id = v.team_id
+              AND pa.source_id = 'fjelstul'
             """,
-            ("fjelstul", "Fjelstul World Cup Database", dataset, len(rows), f"data/raw/fjelstul/{dataset}.csv", "Authoritative historical player dataset"),
+            batch,
+            page_size=BATCH_SIZE,
         )
+        progress(f"fjelstul substitution minute batch {batch_index // BATCH_SIZE + 1}: updated {len(batch)} appearances")
+    stats["fjelstul_substitution_rows"] += len(substitution_rows)
+
+    metadata_rows = [
+        ("fjelstul", "Fjelstul World Cup Database", dataset, len(rows), f"data/raw/fjelstul/{dataset}.csv", "Authoritative historical player dataset")
+        for dataset, rows in (
+            ("players", players),
+            ("squads", squads),
+            ("player_appearances", appearances),
+            ("goals", goals),
+            ("penalty_kicks", penalty_kicks),
+            ("bookings", bookings),
+            ("substitutions", substitutions),
+            ("awards", awards),
+            ("award_winners", award_winners),
+        )
+    ]
+    execute_values(
+        cursor,
+        """
+        INSERT INTO source_metadata (source_id, source_name, dataset_name, match_count, file_path, notes)
+        VALUES %s
+        ON CONFLICT (source_id, dataset_name, COALESCE(coverage_year, 0), COALESCE(competition_id, 0), COALESCE(season_id, 0))
+        DO UPDATE SET match_count = EXCLUDED.match_count, file_path = EXCLUDED.file_path, downloaded_at = NOW()
+        """,
+        metadata_rows,
+        page_size=BATCH_SIZE,
+    )
+    return {
+        "players": player_counts.get("players", 0),
+        "aliases": player_counts.get("aliases", 0),
+        "squads": len(squad_rows),
+        "matches": len(match_link_rows),
+        "goals": len(goal_rows),
+        "bookings": len(booking_rows),
+        "appearances": len(appearance_rows),
+        "player_stats": len(stat_rows),
+        "substitutions": len(substitution_rows),
+        "metadata": len(metadata_rows),
+    }
 
 
 def statsbomb_match_key(match):
@@ -440,9 +697,9 @@ def statsbomb_match_key(match):
     )
 
 
-def load_statsbomb(cursor, stats):
+def load_statsbomb(cursor, stats, coverage_filter=None):
     if not METADATA_FILE.exists():
-        return
+        return {"seasons": 0, "matches": 0, "events": 0, "player_stats": 0}
     metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
     tournaments, teams, match_map = load_maps(cursor)
     player_lookup = {}
@@ -459,13 +716,19 @@ def load_statsbomb(cursor, stats):
         if team_id:
             player_lookup[(team_id, normalized)] = player_id
 
-    for coverage in metadata.get("statsbomb_coverage", []):
+    coverages = [coverage_filter] if coverage_filter else metadata.get("statsbomb_coverage", [])
+    total_events = 0
+    total_stats = 0
+    total_linked = 0
+    seasons_loaded = 0
+    for coverage in coverages:
         season_dir = ROOT / coverage["file_path"]
         matches_path = season_dir / "matches.json"
         if not matches_path.exists():
             continue
         sb_matches = json.loads(matches_path.read_text(encoding="utf-8"))
         linked = 0
+        seasons_loaded += 1
         for sb_match in sb_matches:
             canonical_match_id = match_map.get(statsbomb_match_key(sb_match))
             if not canonical_match_id:
@@ -548,7 +811,7 @@ def load_statsbomb(cursor, stats):
                                 event.get("minute"),
                                 event.get("second"),
                                 outcome,
-                                Json(event),
+                                Json(event) if STORE_RAW_EVENT_JSON else None,
                             )
                         )
                     if player_id:
@@ -581,15 +844,32 @@ def load_statsbomb(cursor, stats):
                         event_rows,
                         page_size=1000,
                     )
+                    total_events += len(event_rows)
 
-            for (player_id, match_id), values in aggregates.items():
-                cursor.execute(
+            stat_rows = [
+                (
+                    player_id,
+                    match_id,
+                    values["shots"],
+                    values["shots_on_target"],
+                    values["passes_attempted"],
+                    values["passes_completed"],
+                    values["chances_created"],
+                    values["tackles"],
+                    values["interceptions"],
+                    "statsbomb",
+                )
+                for (player_id, match_id), values in aggregates.items()
+            ]
+            if stat_rows:
+                execute_values(
+                    cursor,
                     """
                     INSERT INTO player_match_stats (
                       player_id, match_id, shots, shots_on_target, passes_attempted,
                       passes_completed, chances_created, tackles, interceptions, source_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES %s
                     ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
                       shots = EXCLUDED.shots,
                       shots_on_target = EXCLUDED.shots_on_target,
@@ -599,19 +879,10 @@ def load_statsbomb(cursor, stats):
                       tackles = EXCLUDED.tackles,
                       interceptions = EXCLUDED.interceptions
                     """,
-                    (
-                        player_id,
-                        match_id,
-                        values["shots"],
-                        values["shots_on_target"],
-                        values["passes_attempted"],
-                        values["passes_completed"],
-                        values["chances_created"],
-                        values["tackles"],
-                        values["interceptions"],
-                        "statsbomb",
-                    ),
+                    stat_rows,
+                    page_size=BATCH_SIZE,
                 )
+                total_stats += len(stat_rows)
         cursor.execute(
             """
             INSERT INTO source_metadata (
@@ -633,6 +904,9 @@ def load_statsbomb(cursor, stats):
                 coverage.get("notes"),
             ),
         )
+        total_linked += linked
+        progress(f"statsbomb season {coverage.get('coverage_year')}: linked_matches={linked}, events={total_events}, player_stats={total_stats}")
+    return {"seasons": seasons_loaded, "matches": total_linked, "events": total_events, "player_stats": total_stats}
 
 
 def parse_espn_clock(item):
@@ -757,14 +1031,14 @@ def load_espn_2026(cursor, stats):
     scoreboard_path = ESPN_2026_DIR / "scoreboard_20260611_20260719.json"
     summaries_dir = ESPN_2026_DIR / "summaries"
     if not scoreboard_path.exists() or not summaries_dir.exists():
-        return
+        return {"linked_matches": 0, "appearances": 0, "fallback_goals": 0}
 
     scoreboard = json.loads(scoreboard_path.read_text(encoding="utf-8"))
     tournaments, teams, match_map = load_maps(cursor)
     tournament_id = tournaments.get(2026)
     if not tournament_id:
         record_issue(cursor, "espn_2026", "missing_tournament", "Cannot load ESPN 2026 data because tournament 2026 is not loaded", "tournament", "2026", severity="error")
-        return
+        return {"linked_matches": 0, "appearances": 0, "fallback_goals": 0}
 
     event_match = {}
     event_team_ids = {}
@@ -979,6 +1253,7 @@ def load_espn_2026(cursor, stats):
                     coverage.get("notes"),
                 ),
             )
+    return {"linked_matches": linked, "appearances": appearances_loaded, "fallback_goals": goal_events_loaded}
 
 
 def update_quality_metrics(cursor, stats):
@@ -1013,28 +1288,56 @@ def update_quality_metrics(cursor, stats):
             stats["conflicting_appearance_records"],
         ),
     )
+    return {
+        "player_aliases": player_aliases,
+        "statsbomb_players": statsbomb_players,
+        "players_without_advanced_coverage": no_advanced,
+        "ambiguous_issues": ambiguous,
+    }
 
 
-def load_player_data(database_url=None):
+def clear_source_quality_issues(cursor, stats):
+    cursor.execute("DELETE FROM data_quality_issues WHERE source_id IN ('fjelstul', 'statsbomb', 'espn_2026')")
+    return {"deleted_quality_issues": cursor.rowcount}
+
+
+def statsbomb_coverages():
+    if not METADATA_FILE.exists():
+        return []
+    metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
+    return metadata.get("statsbomb_coverage", [])
+
+
+def load_player_data(database_url=None, resume=False):
     database_url = database_url or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/worldcup")
-    connection = psycopg2.connect(database_url)
     stats = Counter()
-    try:
-        with connection:
-            with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM data_quality_issues WHERE source_id IN ('fjelstul', 'statsbomb', 'espn_2026')")
-                load_fjelstul(cursor, stats)
-                load_statsbomb(cursor, stats)
-                load_espn_2026(cursor, stats)
-                update_quality_metrics(cursor, stats)
-        return stats
-    finally:
-        connection.close()
+    phases = []
+    if not resume:
+        phases.append(("clear source quality issues", clear_source_quality_issues))
+    phases.extend(
+        [
+            ("Fjelstul players and aliases", lambda cursor, stats: load_fjelstul(cursor, stats, phase="players")),
+            ("Fjelstul squads and match-player links", lambda cursor, stats: load_fjelstul(cursor, stats, phase="squads_links")),
+            ("Fjelstul appearances, goals, bookings, and substitutions", lambda cursor, stats: load_fjelstul(cursor, stats, phase="events")),
+        ]
+    )
+    for coverage in statsbomb_coverages():
+        label = f"StatsBomb season {coverage.get('coverage_year') or coverage.get('season_id')}"
+        phases.append((label, lambda cursor, stats, coverage=coverage: load_statsbomb(cursor, stats, coverage)))
+    phases.append(("ESPN 2026 data", load_espn_2026))
+    phases.append(("final quality metrics", update_quality_metrics))
+
+    for phase_name, phase_func in phases:
+        execute_phase(database_url, phase_name, phase_func, stats, resume=resume)
+    return stats
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Load player data into an existing World Cup database.")
+    parser.add_argument("--resume", action="store_true", help="Continue an interrupted idempotent load without clearing source quality issues.")
+    args = parser.parse_args()
     load_dotenv(ROOT / "backend" / ".env")
-    stats = load_player_data()
+    stats = load_player_data(resume=args.resume)
     print("Player data loaded")
     for key in sorted(stats):
         print(f"- {key}: {stats[key]}")
