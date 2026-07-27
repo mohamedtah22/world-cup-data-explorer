@@ -36,7 +36,7 @@ FRONTEND_ORIGINS=https://world-cup-frontend.onrender.com
 Frontend static site `world-cup-frontend`:
 
 ```text
-VITE_API_URL=https://world-cup-api.onrender.com/api
+VITE_API_URL=https://world-cup-api-0elm.onrender.com/api
 ```
 
 If Render assigns different service URLs or you use custom domains, update `FRONTEND_ORIGINS` and `VITE_API_URL` in the Render dashboard and redeploy the affected service.
@@ -84,8 +84,8 @@ Use `--force-reset` only after taking any needed backups.
 Check the API:
 
 ```text
-https://world-cup-api.onrender.com/health
-https://world-cup-api.onrender.com/api/dashboard
+https://world-cup-api-0elm.onrender.com/health
+https://world-cup-api-0elm.onrender.com/api/dashboard
 ```
 
 Expected health response:

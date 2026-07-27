@@ -29,7 +29,7 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        value: https://world-cup-api.onrender.com/api
+        value: https://world-cup-api-0elm.onrender.com/api
     routes:
       - type: rewrite
         source: /*
