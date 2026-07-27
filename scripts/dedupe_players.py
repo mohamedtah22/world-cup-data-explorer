@@ -5,7 +5,12 @@ from collections import defaultdict
 import psycopg2
 from dotenv import load_dotenv
 
-from player_identity import VERIFIED_PLAYER_ALIASES, is_partial_name_match, normalize_player_name
+from player_identity import (
+    VERIFIED_PLAYER_ALIASES,
+    is_surname_only_name,
+    normalize_player_name,
+    player_name_parts,
+)
 from load_player_data import ROOT, connect, progress, safe_close, safe_rollback
 
 VERIFIED_ALIAS_TARGETS = VERIFIED_PLAYER_ALIASES
@@ -20,97 +25,337 @@ def player_facts(cursor):
     rows = fetchall(
         cursor,
         """
-        SELECT p.player_id, p.canonical_name, p.birth_date, p.external_fjelstul_id, p.external_statsbomb_id,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT pa.normalized_name), NULL) AS aliases,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT pt.team_id), NULL) AS teams,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT pt.tournament_id), NULL) AS tournaments,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT app.match_id), NULL) AS matches,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT pei.source_id || ':' || pei.external_player_id), NULL) AS mapped_external_ids
+        SELECT p.player_id, p.canonical_name, p.birth_date, p.country_of_birth,
+               p.external_fjelstul_id, p.external_statsbomb_id,
+               ARRAY(SELECT DISTINCT normalize_alias.normalized_name
+                     FROM player_aliases normalize_alias
+                     WHERE normalize_alias.player_id = p.player_id) AS aliases,
+               ARRAY(SELECT DISTINCT original_alias.original_name
+                     FROM player_aliases original_alias
+                     WHERE original_alias.player_id = p.player_id) AS original_aliases,
+               ARRAY(
+                 SELECT DISTINCT team_id
+                 FROM (
+                   SELECT pt.team_id FROM player_tournaments pt WHERE pt.player_id = p.player_id
+                   UNION
+                   SELECT app.team_id FROM player_appearances app WHERE app.player_id = p.player_id
+                   UNION
+                   SELECT g.team_id FROM goals g WHERE g.player_id = p.player_id
+                   UNION
+                   SELECT pei.team_id FROM player_external_ids pei WHERE pei.player_id = p.player_id AND pei.team_id IS NOT NULL
+                 ) team_facts
+               ) AS teams,
+               ARRAY(
+                 SELECT DISTINCT tournament_id
+                 FROM (
+                   SELECT pt.tournament_id FROM player_tournaments pt WHERE pt.player_id = p.player_id
+                   UNION
+                   SELECT m.tournament_id
+                   FROM player_appearances app
+                   JOIN matches m ON m.match_id = app.match_id
+                   WHERE app.player_id = p.player_id
+                   UNION
+                   SELECT g.tournament_id FROM goals g WHERE g.player_id = p.player_id
+                   UNION
+                   SELECT m.tournament_id
+                   FROM player_match_stats pms
+                   JOIN matches m ON m.match_id = pms.match_id
+                   WHERE pms.player_id = p.player_id
+                 ) tournament_facts
+               ) AS tournaments,
+               ARRAY(
+                 SELECT DISTINCT match_id
+                 FROM (
+                   SELECT app.match_id FROM player_appearances app WHERE app.player_id = p.player_id
+                   UNION
+                   SELECT g.match_id FROM goals g WHERE g.player_id = p.player_id
+                   UNION
+                   SELECT pms.match_id FROM player_match_stats pms WHERE pms.player_id = p.player_id
+                 ) match_facts
+               ) AS matches,
+               ARRAY(SELECT DISTINCT pei.source_id || ':' || pei.external_player_id
+                     FROM player_external_ids pei
+                     WHERE pei.player_id = p.player_id) AS mapped_external_ids,
+               ARRAY(
+                 SELECT DISTINCT tm.canonical_name
+                 FROM (
+                   SELECT pt.team_id FROM player_tournaments pt WHERE pt.player_id = p.player_id
+                   UNION
+                   SELECT app.team_id FROM player_appearances app WHERE app.player_id = p.player_id
+                   UNION
+                   SELECT g.team_id FROM goals g WHERE g.player_id = p.player_id
+                   UNION
+                   SELECT pei.team_id FROM player_external_ids pei WHERE pei.player_id = p.player_id AND pei.team_id IS NOT NULL
+                 ) team_fact_names
+                 JOIN teams tm ON tm.team_id = team_fact_names.team_id
+               ) AS team_names,
+               ARRAY(
+                 SELECT DISTINCT tr.year
+                 FROM (
+                   SELECT pt.tournament_id FROM player_tournaments pt WHERE pt.player_id = p.player_id
+                   UNION
+                   SELECT m.tournament_id
+                   FROM player_appearances app
+                   JOIN matches m ON m.match_id = app.match_id
+                   WHERE app.player_id = p.player_id
+                   UNION
+                   SELECT g.tournament_id FROM goals g WHERE g.player_id = p.player_id
+                   UNION
+                   SELECT m.tournament_id
+                   FROM player_match_stats pms
+                   JOIN matches m ON m.match_id = pms.match_id
+                   WHERE pms.player_id = p.player_id
+                 ) tournament_fact_years
+                 JOIN tournaments tr ON tr.tournament_id = tournament_fact_years.tournament_id
+               ) AS tournament_years,
+               (SELECT COUNT(DISTINCT app.match_id) FROM player_appearances app WHERE app.player_id = p.player_id)::int AS appearances,
+               (SELECT COUNT(DISTINCT app.match_id) FROM player_appearances app WHERE app.player_id = p.player_id AND app.started IS TRUE)::int AS starts,
+               (SELECT COALESCE(SUM(app.minutes_played), 0) FROM player_appearances app WHERE app.player_id = p.player_id)::int AS minutes_played,
+               (SELECT COUNT(*) FROM goals g WHERE g.player_id = p.player_id AND NOT g.is_own_goal)::int AS goals,
+               (SELECT COUNT(*) FROM goals g WHERE g.player_id = p.player_id AND g.is_penalty IS TRUE AND NOT g.is_own_goal)::int AS penalty_goals,
+               (SELECT COALESCE(SUM(pms.assists), 0) FROM player_match_stats pms WHERE pms.player_id = p.player_id AND pms.assists IS NOT NULL)::int AS assists
         FROM players p
-        LEFT JOIN player_aliases pa ON pa.player_id = p.player_id
-        LEFT JOIN player_tournaments pt ON pt.player_id = p.player_id
-        LEFT JOIN player_appearances app ON app.player_id = p.player_id
-        LEFT JOIN player_external_ids pei ON pei.player_id = p.player_id
         GROUP BY p.player_id
         """,
     )
     facts = {}
     for row in rows:
-        player_id, name, birth_date, fjelstul_id, statsbomb_id, aliases, teams, tournaments, matches, mapped_external_ids = row
+        (
+            player_id,
+            name,
+            birth_date,
+            country_of_birth,
+            fjelstul_id,
+            statsbomb_id,
+            aliases,
+            original_aliases,
+            teams,
+            tournaments,
+            matches,
+            mapped_external_ids,
+            team_names,
+            tournament_years,
+            appearances,
+            starts,
+            minutes_played,
+            goals,
+            penalty_goals,
+            assists,
+        ) = row
+        base_normalized = normalize_player_name(name, resolve_verified_aliases=False)
         normalized = normalize_player_name(name)
         external_ids = set(mapped_external_ids or [])
         if fjelstul_id:
             external_ids.add(f"fjelstul:{fjelstul_id}")
         if statsbomb_id:
             external_ids.add(f"statsbomb:{statsbomb_id}")
+        source_names = set(original_aliases or []) | {name}
+        raw_aliases = set(aliases or []) | {normalize_player_name(alias, resolve_verified_aliases=False) for alias in source_names}
+        base_aliases = {normalize_player_name(alias, resolve_verified_aliases=False) for alias in raw_aliases} | {base_normalized}
+        aliases = {normalize_player_name(alias) for alias in raw_aliases} | {normalized}
         facts[player_id] = {
             "player_id": player_id,
             "name": name,
+            "source_names": source_names,
+            "base_normalized": base_normalized,
             "normalized": normalized,
             "birth_date": birth_date,
+            "country_of_birth": country_of_birth,
             "external_ids": external_ids,
-            "aliases": {normalize_player_name(alias) for alias in (aliases or [])} | {normalized},
+            "base_aliases": base_aliases,
+            "aliases": aliases,
             "teams": set(teams or []),
+            "team_names": set(team_names or []),
             "tournaments": set(tournaments or []),
+            "tournament_years": set(tournament_years or []),
             "matches": set(matches or []),
+            "stats": {
+                "appearances": appearances or 0,
+                "starts": starts or 0,
+                "minutes_played": minutes_played or 0,
+                "goals": goals or 0,
+                "penalty_goals": penalty_goals or 0,
+                "assists": assists or 0,
+            },
         }
     return facts
 
 
-def has_supporting_evidence(left, right):
-    if left["external_ids"] & right["external_ids"]:
-        return True
-    if is_partial_name_match(left["name"], right["name"]) and not (
-        any(alias in left["aliases"] and target in right["aliases"] for alias, target in VERIFIED_ALIAS_TARGETS.items())
-        or any(alias in right["aliases"] and target in left["aliases"] for alias, target in VERIFIED_ALIAS_TARGETS.items())
-    ):
-        return False
+def has_verified_alias_relationship(left, right):
+    return verified_alias_key(left, right) is not None
+
+
+def verified_alias_key(left, right):
+    for alias, target in VERIFIED_ALIAS_TARGETS.items():
+        if alias in left["base_aliases"] and target in right["aliases"]:
+            return target
+        if alias in right["base_aliases"] and target in left["aliases"]:
+            return target
+    return None
+
+
+def matching_evidence(left, right):
+    evidence = []
+    shared_external_ids = left["external_ids"] & right["external_ids"]
+    if shared_external_ids:
+        evidence.append(f"same external id {', '.join(sorted(shared_external_ids))}")
     if left["birth_date"] and right["birth_date"] and left["birth_date"] == right["birth_date"]:
-        return True
-    if left["teams"] & right["teams"] and (left["tournaments"] & right["tournaments"] or left["matches"] & right["matches"]):
-        return True
-    if left["matches"] & right["matches"]:
-        return True
-    return False
+        evidence.append(f"same birth date {left['birth_date']}")
+    if left["country_of_birth"] and right["country_of_birth"] and normalize_player_name(left["country_of_birth"]) == normalize_player_name(right["country_of_birth"]):
+        evidence.append(f"same country {left['country_of_birth']}")
+    shared_teams = left["teams"] & right["teams"]
+    if shared_teams:
+        shared_team_names = sorted(left["team_names"] & right["team_names"])
+        evidence.append(f"same team {', '.join(shared_team_names) if shared_team_names else ', '.join(str(team_id) for team_id in sorted(shared_teams))}")
+    shared_tournaments = left["tournaments"] & right["tournaments"]
+    if shared_tournaments:
+        shared_years = sorted(left["tournament_years"] & right["tournament_years"])
+        evidence.append(f"same tournament {', '.join(str(year) for year in shared_years) if shared_years else ', '.join(str(tid) for tid in sorted(shared_tournaments))}")
+    shared_matches = left["matches"] & right["matches"]
+    if shared_matches:
+        evidence.append(f"same match count {len(shared_matches)}")
+    if left["tournament_years"] and right["tournament_years"] and year_ranges_overlap(left["tournament_years"], right["tournament_years"]):
+        evidence.append("overlapping tournament year range")
+    return evidence
 
 
-def candidate_groups(cursor):
+def year_ranges_overlap(left_years, right_years):
+    left_min, left_max = min(left_years), max(left_years)
+    right_min, right_max = min(right_years), max(right_years)
+    return left_min <= right_max and right_min <= left_max
+
+
+def has_supporting_evidence(left, right):
+    return bool(matching_evidence(left, right))
+
+
+def conflict_evidence(left, right):
+    conflicts = []
+    if left["birth_date"] and right["birth_date"] and left["birth_date"] != right["birth_date"]:
+        conflicts.append(f"different birth dates {left['birth_date']} vs {right['birth_date']}")
+    if left["country_of_birth"] and right["country_of_birth"] and normalize_player_name(left["country_of_birth"]) != normalize_player_name(right["country_of_birth"]):
+        conflicts.append(f"different countries {left['country_of_birth']} vs {right['country_of_birth']}")
+    return conflicts
+
+
+def names_are_same_full_person(left, right):
+    shared_names = (left["aliases"] & right["aliases"]) | (left["base_aliases"] & right["base_aliases"])
+    return any(len(player_name_parts(name)) > 1 for name in shared_names) or left["base_normalized"] == right["base_normalized"]
+
+
+def surname_alias_key(left, right):
+    verified_key = verified_alias_key(left, right)
+    if verified_key:
+        return verified_key
+    for left_name in left["base_aliases"]:
+        if not is_surname_only_name(left_name):
+            continue
+        if any(len(player_name_parts(right_name)) > 1 and left_name in player_name_parts(right_name) for right_name in right["base_aliases"]):
+            return left_name
+    for right_name in right["base_aliases"]:
+        if not is_surname_only_name(right_name):
+            continue
+        if any(len(player_name_parts(left_name)) > 1 and right_name in player_name_parts(left_name) for left_name in left["base_aliases"]):
+            return right_name
+    return None
+
+
+def plan_reason(left, right):
+    shared_external_ids = left["external_ids"] & right["external_ids"]
+    if shared_external_ids:
+        return "same_external_id", sorted(shared_external_ids)[0], matching_evidence(left, right)
+    conflicts = conflict_evidence(left, right)
+    alias_key = surname_alias_key(left, right)
+    if alias_key:
+        evidence = matching_evidence(left, right)
+        if evidence:
+            return "confirmed_surname_alias", VERIFIED_ALIAS_TARGETS.get(alias_key, alias_key), evidence
+    if names_are_same_full_person(left, right) and not conflicts:
+        return "same_normalized_full_name", sorted(left["aliases"] & right["aliases"] or left["base_aliases"] & right["base_aliases"])[0], matching_evidence(left, right)
+    return None, None, []
+
+
+def build_identity_plan(cursor):
     facts = player_facts(cursor)
-    by_normalized = defaultdict(list)
     by_external_id = defaultdict(list)
-    for fact in facts.values():
-        keys = set(fact["aliases"]) | {fact["normalized"]}
-        for alias, target in VERIFIED_ALIAS_TARGETS.items():
-            if alias in keys:
-                keys.add(target)
-        for key in keys:
-            by_normalized[key].append(fact["player_id"])
+    by_name = defaultdict(list)
+    by_surname = defaultdict(list)
+    for player_id, fact in facts.items():
         for external_id in fact["external_ids"]:
-            by_external_id[external_id].append(fact["player_id"])
+            by_external_id[external_id].append(player_id)
+        for key in fact["base_aliases"]:
+            by_name[key].append(player_id)
+            parts = player_name_parts(key)
+            for part in set(parts):
+                by_surname[part].append(player_id)
 
-    groups = []
+    confirmed = []
+    ambiguous = []
     seen = set()
-    for external_id, player_ids in sorted(by_external_id.items()):
+
+    def add_plan(key, reason, player_ids, evidence_by_duplicate=None):
         unique_ids = tuple(sorted(set(player_ids)))
-        if len(unique_ids) >= 2 and unique_ids not in seen:
-            groups.append((external_id, list(unique_ids)))
+        if len(unique_ids) < 2 or unique_ids in seen:
+            return
+        target_id = choose_canonical(unique_ids, facts)
+        duplicate_ids = [player_id for player_id in unique_ids if player_id != target_id]
+        if duplicate_ids:
+            confirmed.append(
+                {
+                    "key": key,
+                    "reason": reason,
+                    "target_id": target_id,
+                    "duplicate_ids": duplicate_ids,
+                    "player_ids": list(unique_ids),
+                    "evidence": evidence_by_duplicate or {player_id: matching_evidence(facts[target_id], facts[player_id]) for player_id in duplicate_ids},
+                }
+            )
             seen.add(unique_ids)
-    for key, player_ids in sorted(by_normalized.items()):
+
+    for external_id, player_ids in sorted(by_external_id.items()):
+        add_plan(external_id, "same_external_id", player_ids)
+
+    for key, player_ids in sorted(by_name.items()):
+        if len(player_name_parts(key)) < 2:
+            continue
         unique_ids = tuple(sorted(set(player_ids)))
         if len(unique_ids) < 2:
             continue
-        supported = []
-        for player_id in unique_ids:
-            fact = facts[player_id]
-            if key == fact["normalized"] or key in fact["aliases"] or any(alias in fact["aliases"] and target == key for alias, target in VERIFIED_ALIAS_TARGETS.items()):
-                supported.append(player_id)
-        if len(supported) < 2:
+        conflicts = [conflict_evidence(facts[a], facts[b]) for index, a in enumerate(unique_ids) for b in unique_ids[index + 1 :]]
+        if any(conflicts):
+            ambiguous.append({"key": key, "reason": "same_name_conflict", "player_ids": list(unique_ids)})
+        else:
+            add_plan(key, "same_normalized_full_name", unique_ids)
+
+    for surname, player_ids in sorted(by_surname.items()):
+        unique_ids = sorted(set(player_ids))
+        if len(unique_ids) < 2:
             continue
-        supported_key = tuple(sorted(supported))
-        if supported_key not in seen and any(has_supporting_evidence(facts[a], facts[b]) for index, a in enumerate(supported) for b in supported[index + 1 :]):
-            groups.append((key, supported))
-            seen.add(supported_key)
-    return groups, facts
+        surname_only_ids = [player_id for player_id in unique_ids if any(is_surname_only_name(alias) and alias == surname for alias in facts[player_id]["base_aliases"])]
+        full_name_ids = [player_id for player_id in unique_ids if any(len(player_name_parts(alias)) > 1 and surname in player_name_parts(alias) for alias in facts[player_id]["base_aliases"])]
+        if not surname_only_ids or not full_name_ids:
+            continue
+        for short_id in surname_only_ids:
+            supported = []
+            evidence_by_duplicate = {}
+            for full_id in full_name_ids:
+                if short_id == full_id:
+                    continue
+                reason, key, evidence = plan_reason(facts[short_id], facts[full_id])
+                if reason == "confirmed_surname_alias":
+                    supported.append(full_id)
+                    evidence_by_duplicate[full_id] = evidence
+            if len(supported) == 1:
+                add_plan(VERIFIED_ALIAS_TARGETS.get(surname, surname), "confirmed_surname_alias", [short_id, supported[0]], evidence_by_duplicate)
+            elif len(supported) > 1:
+                ambiguous.append({"key": surname, "reason": "ambiguous_surname_alias", "player_ids": [short_id] + supported})
+
+    return {"confirmed": confirmed, "ambiguous": ambiguous, "facts": facts}
+
+
+def candidate_groups(cursor):
+    plan = build_identity_plan(cursor)
+    return [(item["key"], item["player_ids"]) for item in plan["confirmed"]], plan["facts"]
 
 
 def choose_canonical(player_ids, facts):
@@ -141,6 +386,28 @@ def merge_players(cursor, target_id, duplicate_id):
     if duplicate and target:
         duplicate_fjelstul_id, duplicate_statsbomb_id, duplicate_birth_date, duplicate_position = duplicate
         target_fjelstul_id, target_statsbomb_id = target
+        if duplicate_fjelstul_id:
+            cursor.execute(
+                """
+                INSERT INTO player_external_ids (source_id, external_player_id, player_id, original_name)
+                SELECT 'fjelstul', %s, %s, canonical_name
+                FROM players
+                WHERE player_id = %s
+                ON CONFLICT (source_id, external_player_id) DO UPDATE SET player_id = EXCLUDED.player_id
+                """,
+                (duplicate_fjelstul_id, target_id, duplicate_id),
+            )
+        if duplicate_statsbomb_id:
+            cursor.execute(
+                """
+                INSERT INTO player_external_ids (source_id, external_player_id, player_id, original_name)
+                SELECT 'statsbomb', %s, %s, canonical_name
+                FROM players
+                WHERE player_id = %s
+                ON CONFLICT (source_id, external_player_id) DO UPDATE SET player_id = EXCLUDED.player_id
+                """,
+                (duplicate_statsbomb_id, target_id, duplicate_id),
+            )
         if duplicate_fjelstul_id and not target_fjelstul_id:
             cursor.execute("UPDATE players SET external_fjelstul_id = NULL WHERE player_id = %s", (duplicate_id,))
             cursor.execute("UPDATE players SET external_fjelstul_id = %s WHERE player_id = %s", (duplicate_fjelstul_id, target_id))
@@ -322,27 +589,52 @@ def normalize_existing_aliases(cursor):
     return {"normalized_aliases": changed, "deleted_alias_conflicts": deleted}
 
 
+def format_fact(fact):
+    stats = fact["stats"]
+    parts = [
+        f"{fact['player_id']}:{fact['name']}",
+        f"aliases={sorted(fact['base_aliases'])[:8]}",
+        f"teams={sorted(fact['team_names']) or sorted(fact['teams'])}",
+        f"tournaments={sorted(fact['tournament_years']) or sorted(fact['tournaments'])}",
+        f"external_ids={sorted(fact['external_ids'])}",
+        (
+            "stats="
+            f"apps:{stats['appearances']} starts:{stats['starts']} min:{stats['minutes_played']} "
+            f"goals:{stats['goals']} pens:{stats['penalty_goals']} assists:{stats['assists']}"
+        ),
+    ]
+    if fact["birth_date"]:
+        parts.insert(2, f"birth_date={fact['birth_date']}")
+    if fact["country_of_birth"]:
+        parts.insert(3, f"country={fact['country_of_birth']}")
+    return " | ".join(parts)
+
+
+def print_identity_report(plan, mode):
+    facts = plan["facts"]
+    progress(f"{mode}: confirmed merge groups={len(plan['confirmed'])} ambiguous review groups={len(plan['ambiguous'])}")
+    for item in plan["confirmed"]:
+        target = facts[item["target_id"]]
+        progress(f"{mode}: {item['reason']} key={item['key']} target={format_fact(target)}")
+        for duplicate_id in item["duplicate_ids"]:
+            evidence = item["evidence"].get(duplicate_id, [])
+            progress(f"{mode}:   duplicate={format_fact(facts[duplicate_id])} evidence={evidence or ['same normalized full name']}")
+    for item in plan["ambiguous"]:
+        progress(f"{mode}: review required reason={item['reason']} key={item['key']}")
+        for player_id in item["player_ids"]:
+            progress(f"{mode}:   candidate={format_fact(facts[player_id])}")
+
+
 def run(database_url, apply=False):
     connection = connect(database_url)
     try:
         with connection.cursor() as cursor:
-            groups, facts = candidate_groups(cursor)
-            plans = []
-            for key, player_ids in groups:
-                target_id = choose_canonical(player_ids, facts)
-                duplicate_ids = [
-                    player_id
-                    for player_id in player_ids
-                    if player_id != target_id and has_supporting_evidence(facts[target_id], facts[player_id])
-                ]
-                if duplicate_ids:
-                    plans.append((key, target_id, duplicate_ids))
-
-            for key, target_id, duplicate_ids in plans:
-                progress(f"{'merge' if apply else 'dry-run'} normalized={key}: target={target_id} duplicates={duplicate_ids}")
+            plan = build_identity_plan(cursor)
+            print_identity_report(plan, "apply" if apply else "dry-run")
+            for item in plan["confirmed"]:
                 if apply:
-                    for duplicate_id in duplicate_ids:
-                        merge_players(cursor, target_id, duplicate_id)
+                    for duplicate_id in item["duplicate_ids"]:
+                        merge_players(cursor, item["target_id"], duplicate_id)
             if apply:
                 add_verified_aliases(cursor)
                 alias_result = normalize_existing_aliases(cursor)
@@ -353,7 +645,7 @@ def run(database_url, apply=False):
                 connection.commit()
             else:
                 connection.rollback()
-            return plans
+            return plan
     except Exception:
         safe_rollback(connection)
         raise
@@ -364,6 +656,7 @@ def run(database_url, apply=False):
 def main():
     parser = argparse.ArgumentParser(description="Safely merge duplicate World Cup player entities.")
     mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--inspect", action="store_true", help="Print confirmed and ambiguous duplicate candidates without changing data.")
     mode.add_argument("--dry-run", action="store_true", help="Print duplicate merge plan without changing data.")
     mode.add_argument("--apply", action="store_true", help="Apply duplicate merges.")
     args = parser.parse_args()
@@ -371,8 +664,8 @@ def main():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL is required")
-    plans = run(database_url, apply=args.apply)
-    progress(f"candidate groups={len(plans)}")
+    plan = run(database_url, apply=args.apply)
+    progress(f"candidate groups={len(plan['confirmed'])}")
 
 
 if __name__ == "__main__":
