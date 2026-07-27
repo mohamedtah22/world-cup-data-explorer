@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-26T00:55:11.658427+00:00",
+  "generated_at": "2026-07-27T00:00:59.796848+00:00",
   "fjelstul_datasets": [
     {
       "source_id": "fjelstul",
@@ -170,9 +170,9 @@
       "coverage_year": 2026,
       "match_count": 104,
       "file_path": "data/raw/espn_2026",
-      "downloaded_at": "2026-07-26T00:56:14.944516+00:00",
+      "downloaded_at": "2026-07-27T00:01:07.007284+00:00",
       "endpoint": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?limit=200&dates=20260611-20260719",
-      "notes": "Unofficial public JSON cached locally; schemas may change. Completed events: 104; summaries with rosters: 104; scoreboard refreshed."
+      "notes": "Unofficial public JSON cached locally; schemas may change. Completed events: 104; summaries with rosters: 104; scoreboard read from cache."
     }
   ],
   "issues": []
