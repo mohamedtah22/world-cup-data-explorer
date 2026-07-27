@@ -25,6 +25,8 @@ PLAYER_CANONICAL_ALIASES = {
 BATCH_SIZE = int(os.getenv("PLAYER_LOAD_BATCH_SIZE", "1000"))
 MAX_PHASE_ATTEMPTS = 3
 STORE_RAW_EVENT_JSON = os.getenv("STORE_RAW_EVENT_JSON", "false").casefold() in {"1", "true", "yes", "on"}
+STORE_PLAYER_EVENTS = os.getenv("STORE_PLAYER_EVENTS", "false").casefold() in {"1", "true", "yes", "on"}
+STATEMENT_TIMEOUT_MS = int(os.getenv("PGSTATEMENT_TIMEOUT_MS", "300000"))
 
 
 def progress(message):
@@ -69,6 +71,7 @@ def execute_phase(database_url, phase_name, phase_func, stats, resume=False):
             progress(f"starting phase: {phase_name} (attempt {attempt}/{MAX_PHASE_ATTEMPTS})")
             connection = connect(database_url)
             with connection.cursor() as cursor:
+                cursor.execute("SET statement_timeout = %s", (STATEMENT_TIMEOUT_MS,))
                 result = phase_func(cursor, stats)
             connection.commit()
             progress(f"completed phase: {phase_name}; {format_phase_counts(result)}")
@@ -99,6 +102,12 @@ def format_phase_counts(result):
 def chunks(rows, size=BATCH_SIZE):
     for index in range(0, len(rows), size):
         yield index, rows[index : index + size]
+
+
+def commit_cursor_connection(cursor):
+    connection = getattr(cursor, "connection", None)
+    if connection and not connection.closed:
+        connection.commit()
 
 
 def read_csv(name):
@@ -699,7 +708,7 @@ def statsbomb_match_key(match):
 
 def load_statsbomb(cursor, stats, coverage_filter=None):
     if not METADATA_FILE.exists():
-        return {"seasons": 0, "matches": 0, "events": 0, "player_stats": 0}
+        return {"seasons": 0, "matches": 0, "events_parsed": 0, "events_stored": 0, "player_stats": 0}
     metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
     tournaments, teams, match_map = load_maps(cursor)
     player_lookup = {}
@@ -717,7 +726,8 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
             player_lookup[(team_id, normalized)] = player_id
 
     coverages = [coverage_filter] if coverage_filter else metadata.get("statsbomb_coverage", [])
-    total_events = 0
+    total_events_parsed = 0
+    total_events_stored = 0
     total_stats = 0
     total_linked = 0
     seasons_loaded = 0
@@ -729,11 +739,15 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
         sb_matches = json.loads(matches_path.read_text(encoding="utf-8"))
         linked = 0
         seasons_loaded += 1
-        for sb_match in sb_matches:
+        total_matches = len(sb_matches)
+        for match_number, sb_match in enumerate(sb_matches, start=1):
             canonical_match_id = match_map.get(statsbomb_match_key(sb_match))
             if not canonical_match_id:
                 stats["unmatched_players"] += 1
                 record_issue(cursor, "statsbomb", "unmatched_statsbomb_match", "Could not link StatsBomb match to canonical match", "match", str(sb_match.get("match_id")), sb_match)
+                percent = (match_number / total_matches * 100) if total_matches else 100
+                progress(f"statsbomb season {coverage.get('coverage_year')}: match {match_number}/{total_matches} ({percent:.1f}%) skipped unmatched")
+                commit_cursor_connection(cursor)
                 continue
             linked += 1
             cursor.execute("UPDATE matches SET external_statsbomb_id = %s WHERE match_id = %s", (str(sb_match["match_id"]), canonical_match_id))
@@ -781,7 +795,9 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
             })
             if events_path.exists():
                 event_rows = []
-                for event in json.loads(events_path.read_text(encoding="utf-8")):
+                events = json.loads(events_path.read_text(encoding="utf-8"))
+                total_events_parsed += len(events)
+                for event in events:
                     player = event.get("player")
                     team = event.get("team")
                     player_id = team_id = None
@@ -799,7 +815,7 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                         outcome = event.get("pass", {}).get("outcome", {}).get("name")
                     elif event_type == "Duel":
                         outcome = event.get("duel", {}).get("outcome", {}).get("name")
-                    if event.get("id"):
+                    if STORE_PLAYER_EVENTS and event.get("id"):
                         event_rows.append(
                             (
                                 "statsbomb",
@@ -830,7 +846,7 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                             aggregates[key]["tackles"] += 1
                         elif event_type == "Interception":
                             aggregates[key]["interceptions"] += 1
-                if event_rows:
+                if STORE_PLAYER_EVENTS and event_rows:
                     execute_batch(
                         cursor,
                         """
@@ -844,7 +860,7 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                         event_rows,
                         page_size=1000,
                     )
-                    total_events += len(event_rows)
+                    total_events_stored += len(event_rows)
 
             stat_rows = [
                 (
@@ -883,6 +899,13 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
                     page_size=BATCH_SIZE,
                 )
                 total_stats += len(stat_rows)
+            percent = (match_number / total_matches * 100) if total_matches else 100
+            progress(
+                f"statsbomb season {coverage.get('coverage_year')}: match {match_number}/{total_matches} "
+                f"({percent:.1f}%) linked={linked}, events_parsed={total_events_parsed}, "
+                f"events_stored={total_events_stored}, player_stats={total_stats}"
+            )
+            commit_cursor_connection(cursor)
         cursor.execute(
             """
             INSERT INTO source_metadata (
@@ -905,8 +928,11 @@ def load_statsbomb(cursor, stats, coverage_filter=None):
             ),
         )
         total_linked += linked
-        progress(f"statsbomb season {coverage.get('coverage_year')}: linked_matches={linked}, events={total_events}, player_stats={total_stats}")
-    return {"seasons": seasons_loaded, "matches": total_linked, "events": total_events, "player_stats": total_stats}
+        progress(
+            f"statsbomb season {coverage.get('coverage_year')}: linked_matches={linked}, "
+            f"events_parsed={total_events_parsed}, events_stored={total_events_stored}, player_stats={total_stats}"
+        )
+    return {"seasons": seasons_loaded, "matches": total_linked, "events_parsed": total_events_parsed, "events_stored": total_events_stored, "player_stats": total_stats}
 
 
 def parse_espn_clock(item):
@@ -1301,6 +1327,13 @@ def clear_source_quality_issues(cursor, stats):
     return {"deleted_quality_issues": cursor.rowcount}
 
 
+def clear_statsbomb_player_events_when_disabled(cursor, stats):
+    if STORE_PLAYER_EVENTS:
+        return {"deleted_player_events": 0}
+    cursor.execute("DELETE FROM player_events WHERE source_id = %s", ("statsbomb",))
+    return {"deleted_player_events": cursor.rowcount}
+
+
 def statsbomb_coverages():
     if not METADATA_FILE.exists():
         return []
@@ -1321,6 +1354,8 @@ def load_player_data(database_url=None, resume=False):
             ("Fjelstul appearances, goals, bookings, and substitutions", lambda cursor, stats: load_fjelstul(cursor, stats, phase="events")),
         ]
     )
+    if not STORE_PLAYER_EVENTS:
+        phases.append(("clear StatsBomb player_events", clear_statsbomb_player_events_when_disabled))
     for coverage in statsbomb_coverages():
         label = f"StatsBomb season {coverage.get('coverage_year') or coverage.get('season_id')}"
         phases.append((label, lambda cursor, stats, coverage=coverage: load_statsbomb(cursor, stats, coverage)))

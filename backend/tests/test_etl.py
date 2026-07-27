@@ -107,6 +107,7 @@ def test_player_loader_resume_skips_quality_issue_clear(monkeypatch):
     load_player_data_module.load_player_data(database_url="postgresql://example/db", resume=True)
 
     assert "clear source quality issues" not in [phase for phase, _ in phases]
+    assert "clear StatsBomb player_events" in [phase for phase, _ in phases]
     assert [phase for phase, _ in phases][:3] == [
         "Fjelstul players and aliases",
         "Fjelstul squads and match-player links",
@@ -125,6 +126,9 @@ def test_phase_retry_reconnects_after_operational_error(monkeypatch):
 
         def __exit__(self, exc_type, exc, tb):
             return False
+
+        def execute(self, sql, params=()):
+            pass
 
     class FakeConnection:
         closed = 0
@@ -191,3 +195,75 @@ def test_fjelstul_players_and_aliases_use_bulk_batches(monkeypatch):
 
 def test_statsbomb_raw_event_json_is_off_by_default():
     assert load_player_data_module.STORE_RAW_EVENT_JSON is False
+
+
+def test_statsbomb_player_events_are_off_by_default():
+    assert load_player_data_module.STORE_PLAYER_EVENTS is False
+
+
+def test_statsbomb_event_cleanup_when_storage_disabled(monkeypatch):
+    monkeypatch.setattr(load_player_data_module, "STORE_PLAYER_EVENTS", False)
+
+    class FakeCursor:
+        rowcount = 7
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+
+    cursor = FakeCursor()
+    result = load_player_data_module.clear_statsbomb_player_events_when_disabled(cursor, Counter())
+
+    assert result == {"deleted_player_events": 7}
+    assert "DELETE FROM player_events WHERE source_id = %s" in cursor.calls[0][0]
+    assert cursor.calls[0][1] == ("statsbomb",)
+
+
+def test_statsbomb_event_cleanup_skips_when_storage_enabled(monkeypatch):
+    monkeypatch.setattr(load_player_data_module, "STORE_PLAYER_EVENTS", True)
+
+    class FakeCursor:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("cleanup should not run when STORE_PLAYER_EVENTS=true")
+
+    assert load_player_data_module.clear_statsbomb_player_events_when_disabled(FakeCursor(), Counter()) == {"deleted_player_events": 0}
+
+
+def test_execute_phase_sets_statement_timeout(monkeypatch):
+    executed = []
+
+    class FakeCursor:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=()):
+            executed.append((sql, params))
+
+    class FakeConnection:
+        closed = 0
+
+        def cursor(self):
+            return FakeCursor(self)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            self.closed = 1
+
+    monkeypatch.setattr(load_player_data_module, "connect", lambda database_url: FakeConnection())
+
+    load_player_data_module.execute_phase("postgresql://example/db", "phase", lambda cursor, stats: {"ok": 1}, Counter())
+
+    assert executed[0] == ("SET statement_timeout = %s", (load_player_data_module.STATEMENT_TIMEOUT_MS,))
