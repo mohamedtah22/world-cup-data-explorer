@@ -116,6 +116,22 @@ def test_player_loader_resume_skips_quality_issue_clear(monkeypatch):
     assert all(resume for _, resume in phases)
 
 
+def test_player_loader_only_espn_skips_fjelstul_and_statsbomb(monkeypatch):
+    phases = []
+
+    def fake_execute_phase(database_url, phase_name, phase_func, stats, resume=False):
+        phases.append((phase_name, resume))
+        return {}
+
+    monkeypatch.setattr(load_player_data_module, "execute_phase", fake_execute_phase)
+    monkeypatch.setattr(load_player_data_module, "statsbomb_coverages", lambda: [{"coverage_year": 2022}])
+
+    load_player_data_module.load_player_data(database_url="postgresql://example/db", resume=True, only_espn=True)
+
+    assert [phase for phase, _ in phases] == ["ESPN 2026 data", "final quality metrics"]
+    assert all(resume for _, resume in phases)
+
+
 def test_phase_retry_reconnects_after_operational_error(monkeypatch):
     attempts = {"count": 0}
     sleeps = []
@@ -208,6 +224,14 @@ def test_statsbomb_loader_is_assists_only():
     assert "INSERT INTO player_events" not in constants
     assert "player_id, match_id, assists, source_id" in constants
     assert "shots, shots_on_target" not in constants
+
+
+def test_espn_loader_skips_detailed_bookings_and_substitutions():
+    constants = "\n".join(str(value) for value in load_player_data_module.load_espn_2026.__code__.co_consts)
+    assert "espn 2026: match " in constants
+    assert "INSERT INTO bookings" not in constants
+    assert "INSERT INTO substitutions" not in constants
+    assert "skipped_detail_plays" in constants
 
 
 def test_statsbomb_event_cleanup_when_storage_disabled(monkeypatch):

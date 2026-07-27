@@ -1057,17 +1057,30 @@ def load_espn_2026(cursor, stats):
                 (int(home["score"]), int(away["score"]), match_id),
             )
 
+    commit_cursor_connection(cursor)
+
     appearances_loaded = 0
+    stat_rows_loaded = 0
+    squad_rows_loaded = 0
     goal_events_loaded = 0
-    for summary_file in sorted(summaries_dir.glob("*.json")):
+    skipped_detail_events = 0
+    summary_files = [path for path in sorted(summaries_dir.glob("*.json")) if event_match.get(path.stem)]
+    total_matches = len(summary_files)
+    for match_number, summary_file in enumerate(summary_files, start=1):
         event_id = summary_file.stem
         match_id = event_match.get(event_id)
-        if not match_id:
-            continue
+        percent = (match_number / total_matches * 100) if total_matches else 100
+        progress(f"espn 2026: match {match_number}/{total_matches} ({percent:.1f}%) event={event_id} starting")
         summary = json.loads(summary_file.read_text(encoding="utf-8"))
         team_lookup = event_team_ids.get(event_id, {})
         cursor.execute("SELECT COUNT(*) FROM goals WHERE match_id = %s", (match_id,))
         match_already_has_goals = cursor.fetchone()[0] > 0
+        tournament_rows = []
+        appearance_rows = []
+        stat_rows = []
+        goal_rows = []
+        match_appearances = 0
+        match_goals = 0
 
         for roster in summary.get("rosters") or []:
             espn_team = roster.get("team") or {}
@@ -1079,79 +1092,65 @@ def load_espn_2026(cursor, stats):
                 if parse_stat_int(item.get("stats"), "appearances") != 1:
                     continue
                 player_id, _, position, shirt_number, external_id = upsert_espn_player(cursor, teams, team_id, item)
-                cursor.execute(
-                    """
-                    INSERT INTO player_tournaments (player_id, tournament_id, team_id, shirt_number, position, squad_status)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (player_id, tournament_id, team_id) DO UPDATE SET
-                      shirt_number = COALESCE(EXCLUDED.shirt_number, player_tournaments.shirt_number),
-                      position = COALESCE(EXCLUDED.position, player_tournaments.position)
-                    """,
-                    (player_id, tournament_id, team_id, shirt_number, position, "squad"),
-                )
-                entered = parse_espn_clock(item) if item.get("subbedIn") else None
-                exited = parse_espn_clock(item) if item.get("subbedOut") else None
-                cursor.execute(
-                    """
-                    INSERT INTO player_appearances (player_id, match_id, team_id, started, entered_minute, exited_minute, goalkeeper, source_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (player_id, match_id, team_id, source_id) DO UPDATE SET
-                      started = EXCLUDED.started,
-                      entered_minute = EXCLUDED.entered_minute,
-                      exited_minute = EXCLUDED.exited_minute,
-                      goalkeeper = EXCLUDED.goalkeeper
-                    """,
-                    (player_id, match_id, team_id, bool(item.get("starter")), entered, exited, (position or "").casefold() == "goalkeeper", "espn_2026"),
-                )
-                appearances_loaded += 1
-                cursor.execute(
-                    """
-                    INSERT INTO player_match_stats (
-                      player_id, match_id, goals, penalties_scored, assists, source_id
-                    )
-                    VALUES (%s, %s, %s, NULL, %s, %s)
-                    ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
-                      goals = EXCLUDED.goals,
-                      assists = EXCLUDED.assists
-                    """,
+                tournament_rows.append((player_id, tournament_id, team_id, shirt_number, position, "squad"))
+                appearance_rows.append((player_id, match_id, team_id, bool(item.get("starter")), (position or "").casefold() == "goalkeeper", "espn_2026"))
+                stat_rows.append(
                     (
                         player_id,
                         match_id,
                         parse_stat_int(item.get("stats"), "totalGoals"),
                         parse_stat_int(item.get("stats"), "goalAssists"),
                         "espn_2026",
-                    ),
+                    )
                 )
-                for play in item.get("plays") or []:
-                    external_play_id = play.get("id")
-                    if not external_play_id:
-                        continue
-                    minute = parse_espn_clock({"plays": [play]}) or parse_display_minute((play.get("clock") or {}).get("displayValue"))
-                    if play.get("yellowCard") or play.get("redCard"):
-                        cursor.execute(
-                            """
-                            INSERT INTO bookings (external_booking_id, match_id, player_id, team_id, minute, card_type, source_id)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (source_id, external_booking_id) DO NOTHING
-                            """,
-                            (str(external_play_id), match_id, player_id, team_id, minute, "red" if play.get("redCard") else "yellow", "espn_2026"),
-                        )
-                    if play.get("substitution") and item.get("subbedIn"):
-                        out_id = None
-                        subbed_for = item.get("subbedInFor") or {}
-                        out_external = str(((subbed_for.get("athlete") or {}).get("id")) or "").strip()
-                        if out_external:
-                            cursor.execute("SELECT player_id FROM player_external_ids WHERE source_id = %s AND external_player_id = %s", ("espn_2026", out_external))
-                            row = cursor.fetchone()
-                            out_id = row[0] if row else None
-                        cursor.execute(
-                            """
-                            INSERT INTO substitutions (external_substitution_id, match_id, team_id, player_out_id, player_in_id, minute, source_id)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT DO NOTHING
-                            """,
-                            (f"{event_id}:{external_play_id}", match_id, team_id, out_id, player_id, minute, "espn_2026"),
-                        )
+                skipped_detail_events += len(item.get("plays") or [])
+
+        if tournament_rows:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO player_tournaments (player_id, tournament_id, team_id, shirt_number, position, squad_status)
+                VALUES %s
+                ON CONFLICT (player_id, tournament_id, team_id) DO UPDATE SET
+                  shirt_number = COALESCE(EXCLUDED.shirt_number, player_tournaments.shirt_number),
+                  position = COALESCE(EXCLUDED.position, player_tournaments.position)
+                """,
+                tournament_rows,
+                page_size=BATCH_SIZE,
+            )
+        if appearance_rows:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO player_appearances (player_id, match_id, team_id, started, goalkeeper, source_id)
+                VALUES %s
+                ON CONFLICT (player_id, match_id, team_id, source_id) DO UPDATE SET
+                  started = EXCLUDED.started,
+                  goalkeeper = EXCLUDED.goalkeeper
+                """,
+                appearance_rows,
+                page_size=BATCH_SIZE,
+            )
+            match_appearances = len(appearance_rows)
+            appearances_loaded += match_appearances
+        if stat_rows:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO player_match_stats (
+                  player_id, match_id, goals, penalties_scored, assists, source_id
+                )
+                VALUES %s
+                ON CONFLICT (player_id, match_id, source_id) DO UPDATE SET
+                  goals = EXCLUDED.goals,
+                  assists = EXCLUDED.assists
+                """,
+                stat_rows,
+                template="(%s, %s, %s, NULL, %s, %s)",
+                page_size=BATCH_SIZE,
+            )
+            stat_rows_loaded += len(stat_rows)
+        squad_rows_loaded += len(tournament_rows)
 
         if not match_already_has_goals:
             for event in summary.get("keyEvents") or []:
@@ -1170,24 +1169,50 @@ def load_espn_2026(cursor, stats):
                 if not team_id:
                     continue
                 minute = parse_display_minute((event.get("clock") or {}).get("displayValue"))
-                cursor.execute(
-                    """
-                    INSERT INTO goals (source_goal_key, match_id, player_id, team_id, tournament_id, minute, is_penalty, is_own_goal)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (source_goal_key) DO UPDATE SET
-                      player_id = EXCLUDED.player_id,
-                      team_id = EXCLUDED.team_id,
-                      minute = EXCLUDED.minute,
-                      is_penalty = EXCLUDED.is_penalty,
-                      is_own_goal = EXCLUDED.is_own_goal
-                    """,
-                    (f"espn_2026:{event_id}:goal:{event.get('id')}", match_id, player_id, team_id, tournament_id, minute, bool(event.get("penaltyKick")), bool(event.get("ownGoal"))),
+                goal_rows.append(
+                    (
+                        f"espn_2026:{event_id}:goal:{event.get('id')}",
+                        match_id,
+                        player_id,
+                        team_id,
+                        tournament_id,
+                        minute,
+                        bool(event.get("penaltyKick")),
+                        bool(event.get("ownGoal")),
+                    )
                 )
-                goal_events_loaded += 1
+        if goal_rows:
+            execute_values(
+                cursor,
+                """
+                INSERT INTO goals (source_goal_key, match_id, player_id, team_id, tournament_id, minute, is_penalty, is_own_goal)
+                VALUES %s
+                ON CONFLICT (source_goal_key) DO UPDATE SET
+                  player_id = EXCLUDED.player_id,
+                  team_id = EXCLUDED.team_id,
+                  minute = EXCLUDED.minute,
+                  is_penalty = EXCLUDED.is_penalty,
+                  is_own_goal = EXCLUDED.is_own_goal
+                """,
+                goal_rows,
+                page_size=BATCH_SIZE,
+            )
+            match_goals = len(goal_rows)
+            goal_events_loaded += match_goals
+
+        commit_cursor_connection(cursor)
+        progress(
+            f"espn 2026: match {match_number}/{total_matches} ({percent:.1f}%) event={event_id} "
+            f"appearances={match_appearances} stats={len(stat_rows)} fallback_goals={match_goals} skipped_detail_plays={skipped_detail_events}"
+        )
 
     stats["espn_2026_appearances"] = appearances_loaded
+    stats["espn_2026_player_match_stats"] = stat_rows_loaded
+    stats["espn_2026_player_tournaments"] = squad_rows_loaded
     stats["espn_2026_fallback_goals"] = goal_events_loaded
+    stats["espn_2026_skipped_detail_plays"] = skipped_detail_events
     reconcile_espn_openfootball_goals(cursor)
+    commit_cursor_connection(cursor)
 
     if METADATA_FILE.exists():
         metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
@@ -1211,7 +1236,15 @@ def load_espn_2026(cursor, stats):
                     coverage.get("notes"),
                 ),
             )
-    return {"linked_matches": linked, "appearances": appearances_loaded, "fallback_goals": goal_events_loaded}
+    return {
+        "linked_matches": linked,
+        "processed_matches": total_matches,
+        "appearances": appearances_loaded,
+        "player_match_stats": stat_rows_loaded,
+        "player_tournaments": squad_rows_loaded,
+        "fallback_goals": goal_events_loaded,
+        "skipped_detail_plays": skipped_detail_events,
+    }
 
 
 def update_quality_metrics(cursor, stats):
@@ -1276,27 +1309,31 @@ def statsbomb_coverages():
     return metadata.get("statsbomb_coverage", [])
 
 
-def load_player_data(database_url=None, resume=False):
+def load_player_data(database_url=None, resume=False, only_espn=False):
     database_url = database_url or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/worldcup")
     stats = Counter()
     phases = []
-    if not resume:
+    if only_espn:
+        phases.append(("ESPN 2026 data", load_espn_2026))
+        phases.append(("final quality metrics", update_quality_metrics))
+    elif not resume:
         phases.append(("clear source quality issues", clear_source_quality_issues))
-    phases.extend(
-        [
-            ("Fjelstul players and aliases", lambda cursor, stats: load_fjelstul(cursor, stats, phase="players")),
-            ("Fjelstul squads and match-player links", lambda cursor, stats: load_fjelstul(cursor, stats, phase="squads_links")),
-            ("Fjelstul appearances, goals, bookings, and substitutions", lambda cursor, stats: load_fjelstul(cursor, stats, phase="events")),
-        ]
-    )
-    phases.append(("clear StatsBomb player_events", clear_statsbomb_player_events_when_disabled))
-    if not resume:
-        phases.append(("clear StatsBomb player_match_stats", clear_statsbomb_match_stats))
-    for coverage in statsbomb_coverages():
-        label = f"StatsBomb season {coverage.get('coverage_year') or coverage.get('season_id')}"
-        phases.append((label, lambda cursor, stats, coverage=coverage: load_statsbomb(cursor, stats, coverage)))
-    phases.append(("ESPN 2026 data", load_espn_2026))
-    phases.append(("final quality metrics", update_quality_metrics))
+    if not only_espn:
+        phases.extend(
+            [
+                ("Fjelstul players and aliases", lambda cursor, stats: load_fjelstul(cursor, stats, phase="players")),
+                ("Fjelstul squads and match-player links", lambda cursor, stats: load_fjelstul(cursor, stats, phase="squads_links")),
+                ("Fjelstul appearances, goals, bookings, and substitutions", lambda cursor, stats: load_fjelstul(cursor, stats, phase="events")),
+            ]
+        )
+        phases.append(("clear StatsBomb player_events", clear_statsbomb_player_events_when_disabled))
+        if not resume:
+            phases.append(("clear StatsBomb player_match_stats", clear_statsbomb_match_stats))
+        for coverage in statsbomb_coverages():
+            label = f"StatsBomb season {coverage.get('coverage_year') or coverage.get('season_id')}"
+            phases.append((label, lambda cursor, stats, coverage=coverage: load_statsbomb(cursor, stats, coverage)))
+        phases.append(("ESPN 2026 data", load_espn_2026))
+        phases.append(("final quality metrics", update_quality_metrics))
 
     for phase_name, phase_func in phases:
         execute_phase(database_url, phase_name, phase_func, stats, resume=resume)
@@ -1306,9 +1343,10 @@ def load_player_data(database_url=None, resume=False):
 def main():
     parser = argparse.ArgumentParser(description="Load player data into an existing World Cup database.")
     parser.add_argument("--resume", action="store_true", help="Continue an interrupted idempotent load without clearing source quality issues.")
+    parser.add_argument("--only-espn", action="store_true", help="Load only ESPN 2026 player data and final quality metrics.")
     args = parser.parse_args()
     load_dotenv(ROOT / "backend" / ".env")
-    stats = load_player_data(resume=args.resume)
+    stats = load_player_data(resume=args.resume, only_espn=args.only_espn)
     print("Player data loaded")
     for key in sorted(stats):
         print(f"- {key}: {stats[key]}")
