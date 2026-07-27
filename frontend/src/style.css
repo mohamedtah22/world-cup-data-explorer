@@ -298,6 +298,15 @@ select {
   text-align: left;
 }
 
+.autocomplete-menu button {
+  display: grid;
+  gap: 2px;
+}
+
+.autocomplete-menu button small {
+  color: var(--muted);
+}
+
 .autocomplete-menu button:last-child,
 .autocomplete-state:last-child {
   border-bottom: 0;

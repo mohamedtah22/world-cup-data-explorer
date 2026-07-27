@@ -27,6 +27,7 @@ ALIASES = {
 }
 
 PLAYER_CANONICAL_ALIASES = {
+    "messi": "lionel messi",
     "lionel andrés messi cuccittini": "lionel messi",
 }
 

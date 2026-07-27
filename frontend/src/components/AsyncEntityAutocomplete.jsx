@@ -120,7 +120,8 @@ export default function AsyncEntityAutocomplete({ label, value, onChange, search
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => selectItem(item)}
             >
-              {item.label}
+              <span>{item.label}</span>
+              {item.description && <small>{item.description}</small>}
             </button>
           ))}
         </div>

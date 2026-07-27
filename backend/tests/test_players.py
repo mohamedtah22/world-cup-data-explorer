@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2] / "scripts"))
 import app as backend_app
 from load_database import normalize_person_name
 from load_player_data import statsbomb_match_key
+import dedupe_players
 
 
 def client():
@@ -16,6 +17,8 @@ def client():
 
 def test_player_identity_resolution_normalizes_names():
     assert normalize_person_name("  Lionel   Messi ") == "lionel messi"
+    assert normalize_person_name("Messi") == "lionel messi"
+    assert normalize_person_name("Julio Musimessi") == "julio musimessi"
 
 
 def test_duplicate_player_prevention_sql_uses_external_id():
@@ -98,3 +101,26 @@ def test_player_comparison(monkeypatch):
     response = client().get("/api/players/compare?player1=1&player2=2")
     assert response.status_code == 200
     assert response.get_json()["player1"]["player"] == "A"
+
+
+def test_dedupe_groups_messi_but_not_julio_musimessi(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self.rows = []
+
+        def execute(self, sql, params=()):
+            self.rows = [
+                (1, "Messi", None, None, None, ["lionel messi"], [10], [2022], [100]),
+                (2, "Lionel Messi", None, "p_lionel", None, ["lionel messi"], [10], [2022], [101]),
+                (3, "Julio Musimessi", None, "p_julio", None, ["julio musimessi"], [20], [1958], [200]),
+            ]
+
+        def fetchall(self):
+            return self.rows
+
+    groups, facts = dedupe_players.candidate_groups(FakeCursor())
+    messi_groups = [(key, ids) for key, ids in groups if key == "lionel messi"]
+
+    assert messi_groups == [("lionel messi", [1, 2])]
+    assert 3 not in messi_groups[0][1]
+    assert dedupe_players.choose_canonical([1, 2], facts) == 2

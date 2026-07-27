@@ -20,6 +20,7 @@ STATSBOMB_DIR = ROOT / "data" / "raw" / "statsbomb"
 ESPN_2026_DIR = ROOT / "data" / "raw" / "espn_2026"
 METADATA_FILE = ROOT / "data" / "raw" / "source_metadata.json"
 PLAYER_CANONICAL_ALIASES = {
+    "messi": "lionel messi",
     "lionel andrés messi cuccittini": "lionel messi",
 }
 BATCH_SIZE = int(os.getenv("PLAYER_LOAD_BATCH_SIZE", "1000"))
@@ -282,11 +283,31 @@ def load_fjelstul_players_and_aliases(cursor, rows):
             parse_date(row.get("birth_date")),
             preferred_position(row),
             row["player_id"],
+            normalize_person_name(player_name(row)),
         )
         for row in rows
         if row.get("player_id")
     ]
     for batch_index, batch in chunks(player_rows):
+        execute_values(
+            cursor,
+            """
+            UPDATE players AS p
+            SET canonical_name = v.canonical_name,
+                birth_date = COALESCE(v.birth_date, p.birth_date),
+                preferred_position = COALESCE(v.preferred_position, p.preferred_position),
+                external_fjelstul_id = v.external_fjelstul_id
+            FROM (VALUES %s) AS v(canonical_name, birth_date, preferred_position, external_fjelstul_id, normalized_name)
+            JOIN player_aliases pa ON pa.normalized_name = v.normalized_name
+            WHERE p.player_id = pa.player_id
+              AND p.external_fjelstul_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM players owner WHERE owner.external_fjelstul_id = v.external_fjelstul_id
+              )
+            """,
+            batch,
+            page_size=BATCH_SIZE,
+        )
         execute_values(
             cursor,
             """
@@ -297,7 +318,7 @@ def load_fjelstul_players_and_aliases(cursor, rows):
               birth_date = COALESCE(EXCLUDED.birth_date, players.birth_date),
               preferred_position = COALESCE(EXCLUDED.preferred_position, players.preferred_position)
             """,
-            batch,
+            [row[:4] for row in batch],
             page_size=BATCH_SIZE,
         )
         progress(f"fjelstul players batch {batch_index // BATCH_SIZE + 1}: upserted {len(batch)} players")

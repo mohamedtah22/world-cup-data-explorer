@@ -189,7 +189,8 @@ def test_fjelstul_players_and_aliases_use_bulk_batches(monkeypatch):
 
     assert player_ids == {"p1": 1, "p2": 2}
     assert counts == {"players": 2, "aliases": 2}
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert "UPDATE players AS p" in calls[0][0]
     assert all(call[2] == load_player_data_module.BATCH_SIZE for call in calls)
 
 

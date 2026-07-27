@@ -13,6 +13,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 app = Flask(__name__)
+PLAYER_CANONICAL_ALIASES = {
+    "messi": "lionel messi",
+    "lionel andrés messi cuccittini": "lionel messi",
+}
+
+
+def normalize_person_name(name):
+    normalized = " ".join((name or "Unknown player").strip().casefold().split())
+    return PLAYER_CANONICAL_ALIASES.get(normalized, normalized)
 
 
 def allowed_origins():
@@ -350,20 +359,45 @@ def search_players():
     return jsonify(
         run_query(
             """
-            SELECT player_id AS id, canonical_name AS label
-            FROM players
-            WHERE canonical_name ILIKE '%%' || %s || '%%'
+            WITH candidates AS (
+              SELECT p.player_id,
+                     p.canonical_name,
+                     p.birth_date,
+                     STRING_AGG(DISTINCT tm.canonical_name, ', ' ORDER BY tm.canonical_name) AS teams,
+                     MIN(
+                       CASE
+                         WHEN LOWER(p.canonical_name) = LOWER(%s) THEN 0
+                         WHEN EXISTS (
+                           SELECT 1 FROM player_aliases pa
+                           WHERE pa.player_id = p.player_id AND LOWER(pa.original_name) = LOWER(%s)
+                         ) THEN 0
+                         WHEN p.canonical_name ILIKE %s || '%%' THEN 1
+                         WHEN EXISTS (
+                           SELECT 1 FROM player_aliases pa
+                           WHERE pa.player_id = p.player_id AND pa.original_name ILIKE %s || '%%'
+                         ) THEN 1
+                         ELSE 2
+                       END
+                     ) AS rank
+              FROM players p
+              LEFT JOIN player_aliases pa ON pa.player_id = p.player_id
+              LEFT JOIN player_tournaments pt ON pt.player_id = p.player_id
+              LEFT JOIN teams tm ON tm.team_id = pt.team_id
+              WHERE p.canonical_name ILIKE '%%' || %s || '%%'
+                 OR pa.original_name ILIKE '%%' || %s || '%%'
+                 OR pa.normalized_name ILIKE '%%' || %s || '%%'
+              GROUP BY p.player_id
+            )
+            SELECT player_id AS id,
+                   canonical_name AS label,
+                   TRIM(BOTH ' · ' FROM CONCAT_WS(' · ', NULLIF(teams, ''), CASE WHEN birth_date IS NOT NULL THEN 'b. ' || EXTRACT(YEAR FROM birth_date)::int::text END)) AS description
+            FROM candidates
             ORDER BY
-              CASE
-                WHEN LOWER(canonical_name) = LOWER(%s) THEN 0
-                WHEN canonical_name ILIKE %s || '%%' THEN 1
-                WHEN canonical_name ILIKE '%% ' || %s || '%%' THEN 2
-                ELSE 3
-              END,
+              rank,
               canonical_name
             LIMIT %s
             """,
-            (query, query, query, query, limit),
+            (query, query, query, query, query, query, normalize_person_name(query), limit),
         )
     )
 
