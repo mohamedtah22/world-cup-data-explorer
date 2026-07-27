@@ -5,12 +5,10 @@ from collections import defaultdict
 import psycopg2
 from dotenv import load_dotenv
 
-from load_database import normalize_person_name
+from player_identity import VERIFIED_PLAYER_ALIASES, is_partial_name_match, normalize_player_name
 from load_player_data import ROOT, connect, progress, safe_close, safe_rollback
 
-VERIFIED_ALIAS_TARGETS = {
-    "messi": "lionel messi",
-}
+VERIFIED_ALIAS_TARGETS = VERIFIED_PLAYER_ALIASES
 
 
 def fetchall(cursor, sql, params=()):
@@ -26,25 +24,32 @@ def player_facts(cursor):
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT pa.normalized_name), NULL) AS aliases,
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT pt.team_id), NULL) AS teams,
                ARRAY_REMOVE(ARRAY_AGG(DISTINCT pt.tournament_id), NULL) AS tournaments,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT app.match_id), NULL) AS matches
+               ARRAY_REMOVE(ARRAY_AGG(DISTINCT app.match_id), NULL) AS matches,
+               ARRAY_REMOVE(ARRAY_AGG(DISTINCT pei.source_id || ':' || pei.external_player_id), NULL) AS mapped_external_ids
         FROM players p
         LEFT JOIN player_aliases pa ON pa.player_id = p.player_id
         LEFT JOIN player_tournaments pt ON pt.player_id = p.player_id
         LEFT JOIN player_appearances app ON app.player_id = p.player_id
+        LEFT JOIN player_external_ids pei ON pei.player_id = p.player_id
         GROUP BY p.player_id
         """,
     )
     facts = {}
     for row in rows:
-        player_id, name, birth_date, fjelstul_id, statsbomb_id, aliases, teams, tournaments, matches = row
-        normalized = normalize_person_name(name)
+        player_id, name, birth_date, fjelstul_id, statsbomb_id, aliases, teams, tournaments, matches, mapped_external_ids = row
+        normalized = normalize_player_name(name)
+        external_ids = set(mapped_external_ids or [])
+        if fjelstul_id:
+            external_ids.add(f"fjelstul:{fjelstul_id}")
+        if statsbomb_id:
+            external_ids.add(f"statsbomb:{statsbomb_id}")
         facts[player_id] = {
             "player_id": player_id,
             "name": name,
             "normalized": normalized,
             "birth_date": birth_date,
-            "external_ids": {value for value in (fjelstul_id, statsbomb_id) if value},
-            "aliases": set(aliases or []) | {normalized},
+            "external_ids": external_ids,
+            "aliases": {normalize_player_name(alias) for alias in (aliases or [])} | {normalized},
             "teams": set(teams or []),
             "tournaments": set(tournaments or []),
             "matches": set(matches or []),
@@ -55,6 +60,11 @@ def player_facts(cursor):
 def has_supporting_evidence(left, right):
     if left["external_ids"] & right["external_ids"]:
         return True
+    if is_partial_name_match(left["name"], right["name"]) and not (
+        any(alias in left["aliases"] and target in right["aliases"] for alias, target in VERIFIED_ALIAS_TARGETS.items())
+        or any(alias in right["aliases"] and target in left["aliases"] for alias, target in VERIFIED_ALIAS_TARGETS.items())
+    ):
+        return False
     if left["birth_date"] and right["birth_date"] and left["birth_date"] == right["birth_date"]:
         return True
     if left["teams"] & right["teams"] and (left["tournaments"] & right["tournaments"] or left["matches"] & right["matches"]):
@@ -67,6 +77,7 @@ def has_supporting_evidence(left, right):
 def candidate_groups(cursor):
     facts = player_facts(cursor)
     by_normalized = defaultdict(list)
+    by_external_id = defaultdict(list)
     for fact in facts.values():
         keys = set(fact["aliases"]) | {fact["normalized"]}
         for alias, target in VERIFIED_ALIAS_TARGETS.items():
@@ -74,10 +85,18 @@ def candidate_groups(cursor):
                 keys.add(target)
         for key in keys:
             by_normalized[key].append(fact["player_id"])
+        for external_id in fact["external_ids"]:
+            by_external_id[external_id].append(fact["player_id"])
 
     groups = []
+    seen = set()
+    for external_id, player_ids in sorted(by_external_id.items()):
+        unique_ids = tuple(sorted(set(player_ids)))
+        if len(unique_ids) >= 2 and unique_ids not in seen:
+            groups.append((external_id, list(unique_ids)))
+            seen.add(unique_ids)
     for key, player_ids in sorted(by_normalized.items()):
-        unique_ids = sorted(set(player_ids))
+        unique_ids = tuple(sorted(set(player_ids)))
         if len(unique_ids) < 2:
             continue
         supported = []
@@ -87,8 +106,10 @@ def candidate_groups(cursor):
                 supported.append(player_id)
         if len(supported) < 2:
             continue
-        if any(has_supporting_evidence(facts[a], facts[b]) for index, a in enumerate(supported) for b in supported[index + 1 :]):
+        supported_key = tuple(sorted(supported))
+        if supported_key not in seen and any(has_supporting_evidence(facts[a], facts[b]) for index, a in enumerate(supported) for b in supported[index + 1 :]):
             groups.append((key, supported))
+            seen.add(supported_key)
     return groups, facts
 
 
@@ -108,18 +129,33 @@ def choose_canonical(player_ids, facts):
 
 def merge_players(cursor, target_id, duplicate_id):
     cursor.execute(
-        """
-        UPDATE players target
-        SET external_fjelstul_id = COALESCE(target.external_fjelstul_id, duplicate.external_fjelstul_id),
-            external_statsbomb_id = COALESCE(target.external_statsbomb_id, duplicate.external_statsbomb_id),
-            birth_date = COALESCE(target.birth_date, duplicate.birth_date),
-            preferred_position = COALESCE(target.preferred_position, duplicate.preferred_position)
-        FROM players duplicate
-        WHERE target.player_id = %s
-          AND duplicate.player_id = %s
-        """,
-        (target_id, duplicate_id),
+        "SELECT external_fjelstul_id, external_statsbomb_id, birth_date, preferred_position FROM players WHERE player_id = %s",
+        (duplicate_id,),
     )
+    duplicate = cursor.fetchone()
+    cursor.execute(
+        "SELECT external_fjelstul_id, external_statsbomb_id FROM players WHERE player_id = %s",
+        (target_id,),
+    )
+    target = cursor.fetchone()
+    if duplicate and target:
+        duplicate_fjelstul_id, duplicate_statsbomb_id, duplicate_birth_date, duplicate_position = duplicate
+        target_fjelstul_id, target_statsbomb_id = target
+        if duplicate_fjelstul_id and not target_fjelstul_id:
+            cursor.execute("UPDATE players SET external_fjelstul_id = NULL WHERE player_id = %s", (duplicate_id,))
+            cursor.execute("UPDATE players SET external_fjelstul_id = %s WHERE player_id = %s", (duplicate_fjelstul_id, target_id))
+        if duplicate_statsbomb_id and not target_statsbomb_id:
+            cursor.execute("UPDATE players SET external_statsbomb_id = NULL WHERE player_id = %s", (duplicate_id,))
+            cursor.execute("UPDATE players SET external_statsbomb_id = %s WHERE player_id = %s", (duplicate_statsbomb_id, target_id))
+        cursor.execute(
+            """
+            UPDATE players
+            SET birth_date = COALESCE(birth_date, %s),
+                preferred_position = COALESCE(preferred_position, %s)
+            WHERE player_id = %s
+            """,
+            (duplicate_birth_date, duplicate_position, target_id),
+        )
 
     cursor.execute(
         """
@@ -252,8 +288,38 @@ def add_verified_aliases(cursor):
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (source_id, normalized_name, player_id) DO NOTHING
             """,
-            (row[0], "verified", alias.title(), alias),
+            (row[0], "verified", alias.title(), normalize_player_name(alias)),
         )
+
+
+def normalize_existing_aliases(cursor):
+    cursor.execute("SELECT alias_id, player_id, source_id, original_name, normalized_name FROM player_aliases ORDER BY alias_id")
+    rows = cursor.fetchall()
+    changed = 0
+    deleted = 0
+    for alias_id, player_id, source_id, original_name, normalized_name in rows:
+        next_normalized = normalize_player_name(original_name)
+        if next_normalized == normalized_name:
+            continue
+        cursor.execute(
+            """
+            SELECT alias_id
+            FROM player_aliases
+            WHERE player_id = %s
+              AND source_id = %s
+              AND normalized_name = %s
+              AND alias_id <> %s
+            LIMIT 1
+            """,
+            (player_id, source_id, next_normalized, alias_id),
+        )
+        if cursor.fetchone():
+            cursor.execute("DELETE FROM player_aliases WHERE alias_id = %s", (alias_id,))
+            deleted += 1
+        else:
+            cursor.execute("UPDATE player_aliases SET normalized_name = %s WHERE alias_id = %s", (next_normalized, alias_id))
+            changed += 1
+    return {"normalized_aliases": changed, "deleted_alias_conflicts": deleted}
 
 
 def run(database_url, apply=False):
@@ -264,8 +330,13 @@ def run(database_url, apply=False):
             plans = []
             for key, player_ids in groups:
                 target_id = choose_canonical(player_ids, facts)
-                duplicate_ids = [player_id for player_id in player_ids if player_id != target_id]
-                plans.append((key, target_id, duplicate_ids))
+                duplicate_ids = [
+                    player_id
+                    for player_id in player_ids
+                    if player_id != target_id and has_supporting_evidence(facts[target_id], facts[player_id])
+                ]
+                if duplicate_ids:
+                    plans.append((key, target_id, duplicate_ids))
 
             for key, target_id, duplicate_ids in plans:
                 progress(f"{'merge' if apply else 'dry-run'} normalized={key}: target={target_id} duplicates={duplicate_ids}")
@@ -274,6 +345,11 @@ def run(database_url, apply=False):
                         merge_players(cursor, target_id, duplicate_id)
             if apply:
                 add_verified_aliases(cursor)
+                alias_result = normalize_existing_aliases(cursor)
+                progress(
+                    f"alias normalization: normalized={alias_result['normalized_aliases']} "
+                    f"deleted_conflicts={alias_result['deleted_alias_conflicts']}"
+                )
                 connection.commit()
             else:
                 connection.rollback()

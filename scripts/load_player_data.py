@@ -13,16 +13,14 @@ from dotenv import load_dotenv
 from psycopg2.extras import Json, execute_values
 
 from load_database import canonical_team_name, fetch_id, normalize_person_name, upsert_player, upsert_team
+from player_identity import VERIFIED_PLAYER_ALIASES
 
 ROOT = Path(__file__).resolve().parents[1]
 FJELSTUL_DIR = ROOT / "data" / "raw" / "fjelstul"
 STATSBOMB_DIR = ROOT / "data" / "raw" / "statsbomb"
 ESPN_2026_DIR = ROOT / "data" / "raw" / "espn_2026"
 METADATA_FILE = ROOT / "data" / "raw" / "source_metadata.json"
-PLAYER_CANONICAL_ALIASES = {
-    "messi": "lionel messi",
-    "lionel andrés messi cuccittini": "lionel messi",
-}
+PLAYER_CANONICAL_ALIASES = VERIFIED_PLAYER_ALIASES
 BATCH_SIZE = int(os.getenv("PLAYER_LOAD_BATCH_SIZE", "1000"))
 MAX_PHASE_ATTEMPTS = 3
 STORE_RAW_EVENT_JSON = os.getenv("STORE_RAW_EVENT_JSON", "false").casefold() in {"1", "true", "yes", "on"}

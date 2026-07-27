@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from player_identity import normalize_player_name
+
 ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw" / "openfootball"
 
@@ -25,12 +27,6 @@ ALIASES = {
     "Curacao": "Curaçao",
     "Congo DR": "DR Congo",
 }
-
-PLAYER_CANONICAL_ALIASES = {
-    "messi": "lionel messi",
-    "lionel andrés messi cuccittini": "lionel messi",
-}
-
 
 @dataclass(frozen=True)
 class CleanMatch:
@@ -234,8 +230,7 @@ def upsert_team(cursor, canonical_name):
 
 
 def normalize_person_name(name):
-    normalized = re.sub(r"\s+", " ", (name or "Unknown player").strip()).casefold()
-    return PLAYER_CANONICAL_ALIASES.get(normalized, normalized)
+    return normalize_player_name(name)
 
 
 def upsert_player(cursor, canonical_name, external_fjelstul_id=None, external_statsbomb_id=None):

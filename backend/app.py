@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import date
 from decimal import Decimal
 
@@ -10,18 +11,18 @@ from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "scripts"))
+if SCRIPTS_DIR not in sys.path:
+    sys.path.append(SCRIPTS_DIR)
+from player_identity import normalize_player_name  # noqa: E402
+
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 app = Flask(__name__)
-PLAYER_CANONICAL_ALIASES = {
-    "messi": "lionel messi",
-    "lionel andrés messi cuccittini": "lionel messi",
-}
 
 
 def normalize_person_name(name):
-    normalized = " ".join((name or "Unknown player").strip().casefold().split())
-    return PLAYER_CANONICAL_ALIASES.get(normalized, normalized)
+    return normalize_player_name(name)
 
 
 def allowed_origins():

@@ -19,6 +19,9 @@ def test_player_identity_resolution_normalizes_names():
     assert normalize_person_name("  Lionel   Messi ") == "lionel messi"
     assert normalize_person_name("Messi") == "lionel messi"
     assert normalize_person_name("Julio Musimessi") == "julio musimessi"
+    assert normalize_person_name("Kylian Mbappé") == "kylian mbappe"
+    assert normalize_person_name("Mbappe, Kylian") == "kylian mbappe"
+    assert normalize_person_name("Jean-Pierre O'Neill") == "jean pierre oneill"
 
 
 def test_duplicate_player_prevention_sql_uses_external_id():
@@ -110,9 +113,9 @@ def test_dedupe_groups_messi_but_not_julio_musimessi(monkeypatch):
 
         def execute(self, sql, params=()):
             self.rows = [
-                (1, "Messi", None, None, None, ["lionel messi"], [10], [2022], [100]),
-                (2, "Lionel Messi", None, "p_lionel", None, ["lionel messi"], [10], [2022], [101]),
-                (3, "Julio Musimessi", None, "p_julio", None, ["julio musimessi"], [20], [1958], [200]),
+                (1, "Messi", None, None, None, ["lionel messi"], [10], [2022], [100], []),
+                (2, "Lionel Messi", None, "p_lionel", None, ["lionel messi"], [10], [2022], [101], []),
+                (3, "Julio Musimessi", None, "p_julio", None, ["julio musimessi"], [20], [1958], [200], []),
             ]
 
         def fetchall(self):
@@ -124,3 +127,36 @@ def test_dedupe_groups_messi_but_not_julio_musimessi(monkeypatch):
     assert messi_groups == [("lionel messi", [1, 2])]
     assert 3 not in messi_groups[0][1]
     assert dedupe_players.choose_canonical([1, 2], facts) == 2
+
+
+def test_dedupe_does_not_merge_ambiguous_same_surname():
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            self.rows = [
+                (1, "Ronaldo", None, None, None, ["ronaldo"], [1], [1998], [10], []),
+                (2, "Cristiano Ronaldo", None, "cr7", None, ["ronaldo"], [2], [2018], [20], []),
+            ]
+
+        def fetchall(self):
+            return self.rows
+
+    groups, _ = dedupe_players.candidate_groups(FakeCursor())
+
+    assert not groups
+
+
+def test_dedupe_groups_same_source_external_id():
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            self.rows = [
+                (1, "Kylian Mbappe", None, None, None, ["kylian mbappe"], [1], [2022], [10], ["espn_2026:123"]),
+                (2, "Kylian Mbappé", None, None, None, ["kylian mbappe"], [1], [2022], [11], ["espn_2026:123"]),
+            ]
+
+        def fetchall(self):
+            return self.rows
+
+    groups, facts = dedupe_players.candidate_groups(FakeCursor())
+
+    assert groups[0][1] == [1, 2]
+    assert dedupe_players.has_supporting_evidence(facts[1], facts[2])
