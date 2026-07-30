@@ -160,6 +160,20 @@ def parse_display_minute(value):
         return None
 
 
+def espn_event_type(event):
+    return clean_text((event.get("type") or {}).get("type")) or ""
+
+
+def is_espn_goal_event(event):
+    event_type = espn_event_type(event).casefold()
+    return event_type == "goal" or event_type.startswith("goal---") or event_type == "penalty---scored"
+
+
+def is_espn_penalty_goal(event):
+    event_type = espn_event_type(event).casefold()
+    return bool(event.get("penaltyKick")) or event_type == "penalty---scored"
+
+
 def parse_date(value):
     value = clean_text(value)
     return date.fromisoformat(value) if value else None
@@ -994,6 +1008,91 @@ def reconcile_espn_openfootball_goals(cursor):
     )
 
 
+def reconcile_espn_stat_goals(cursor):
+    """Fill missing 2026 goal rows from ESPN per-match player totals.
+
+    OpenFootball can contain a partially updated match: the match/score may be
+    present while one or more goal events are still missing.  The old loader
+    treated "the match already has at least one goal" as complete and skipped
+    ESPN goal fallback entirely.  That left all-time leaderboards stale even
+    though ESPN's roster statistics had the correct per-player goal total.
+
+    This reconciliation is idempotent.  For every ESPN player/match row it
+    compares the authoritative per-match total with the non-own-goal events
+    already stored, then creates only the missing number of aggregate goal
+    rows.  Exact event rows remain preferred whenever they are available.
+    """
+    cursor.execute(
+        """
+        WITH espn_totals AS (
+          SELECT pms.player_id,
+                 pms.match_id,
+                 MAX(COALESCE(pms.goals, 0))::int AS expected_goals
+          FROM player_match_stats pms
+          JOIN matches m ON m.match_id = pms.match_id
+          JOIN tournaments tr ON tr.tournament_id = m.tournament_id
+          WHERE pms.source_id = 'espn_2026'
+            AND tr.year = 2026
+            AND COALESCE(pms.goals, 0) > 0
+          GROUP BY pms.player_id, pms.match_id
+        ),
+        event_totals AS (
+          SELECT g.player_id,
+                 g.match_id,
+                 COUNT(*)::int AS stored_goals
+          FROM goals g
+          JOIN matches m ON m.match_id = g.match_id
+          JOIN tournaments tr ON tr.tournament_id = m.tournament_id
+          WHERE tr.year = 2026
+            AND g.player_id IS NOT NULL
+            AND NOT g.is_own_goal
+          GROUP BY g.player_id, g.match_id
+        ),
+        missing AS (
+          SELECT et.player_id,
+                 et.match_id,
+                 pa.team_id,
+                 m.tournament_id,
+                 et.expected_goals - COALESCE(ev.stored_goals, 0) AS missing_goals
+          FROM espn_totals et
+          JOIN matches m ON m.match_id = et.match_id
+          JOIN LATERAL (
+            SELECT appearance.team_id
+            FROM player_appearances appearance
+            WHERE appearance.player_id = et.player_id
+              AND appearance.match_id = et.match_id
+            ORDER BY (appearance.source_id = 'espn_2026') DESC
+            LIMIT 1
+          ) pa ON TRUE
+          LEFT JOIN event_totals ev
+            ON ev.player_id = et.player_id
+           AND ev.match_id = et.match_id
+          WHERE et.expected_goals > COALESCE(ev.stored_goals, 0)
+        )
+        INSERT INTO goals (
+          source_goal_key, match_id, player_id, team_id, tournament_id,
+          minute, stoppage_minute, is_penalty, is_own_goal
+        )
+        SELECT CONCAT(
+                 'espn_2026:', missing.match_id,
+                 ':stat_reconciliation:', missing.player_id, ':', generated.goal_number
+               ),
+               missing.match_id,
+               missing.player_id,
+               missing.team_id,
+               missing.tournament_id,
+               NULL,
+               NULL,
+               FALSE,
+               FALSE
+        FROM missing
+        CROSS JOIN LATERAL generate_series(1, missing.missing_goals) AS generated(goal_number)
+        ON CONFLICT (source_goal_key) DO NOTHING
+        """
+    )
+    return cursor.rowcount
+
+
 def load_espn_2026(cursor, stats):
     scoreboard_path = ESPN_2026_DIR / "scoreboard_20260611_20260719.json"
     summaries_dir = ESPN_2026_DIR / "summaries"
@@ -1154,8 +1253,7 @@ def load_espn_2026(cursor, stats):
 
         if not match_already_has_goals:
             for event in summary.get("keyEvents") or []:
-                event_type = (event.get("type") or {}).get("type") or ""
-                if event_type != "goal":
+                if not is_espn_goal_event(event):
                     continue
                 participants = event.get("participants") or []
                 athlete = (participants[0].get("athlete") if participants else {}) or {}
@@ -1177,7 +1275,7 @@ def load_espn_2026(cursor, stats):
                         team_id,
                         tournament_id,
                         minute,
-                        bool(event.get("penaltyKick")),
+                        is_espn_penalty_goal(event),
                         bool(event.get("ownGoal")),
                     )
                 )
@@ -1212,6 +1310,8 @@ def load_espn_2026(cursor, stats):
     stats["espn_2026_fallback_goals"] = goal_events_loaded
     stats["espn_2026_skipped_detail_plays"] = skipped_detail_events
     reconcile_espn_openfootball_goals(cursor)
+    reconciled_goal_rows = reconcile_espn_stat_goals(cursor)
+    stats["espn_2026_reconciled_goals"] = reconciled_goal_rows
     commit_cursor_connection(cursor)
 
     if METADATA_FILE.exists():
@@ -1243,6 +1343,7 @@ def load_espn_2026(cursor, stats):
         "player_match_stats": stat_rows_loaded,
         "player_tournaments": squad_rows_loaded,
         "fallback_goals": goal_events_loaded,
+        "reconciled_goals": reconciled_goal_rows,
         "skipped_detail_plays": skipped_detail_events,
     }
 

@@ -55,8 +55,13 @@ def apply_schema(database_url):
             cursor.execute(SCHEMA.read_text(encoding="utf-8"))
 
 
-def download_sources():
-    subprocess.run([sys.executable, str(ROOT / "scripts" / "download_player_sources.py")], check=True)
+def download_sources(refresh=False, espn_only=False):
+    command = [sys.executable, str(ROOT / "scripts" / "download_player_sources.py")]
+    if refresh:
+        command.append("--refresh")
+    if espn_only:
+        command.append("--espn-only")
+    subprocess.run(command, check=True)
 
 
 def main():
@@ -64,10 +69,23 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--initial-load", action="store_true", help="Load data into an empty database.")
     mode.add_argument("--force-reset", action="store_true", help="Drop/recreate schema and reload data even if data exists.")
+    mode.add_argument(
+        "--update-2026",
+        action="store_true",
+        help="Refresh ESPN 2026 data and update the existing database without resetting historical data.",
+    )
     args = parser.parse_args()
 
     database_url = require_database_url()
     has_data = database_has_data(database_url)
+    if args.update_2026:
+        if not has_data:
+            raise SystemExit("Database is empty. Use --initial-load first.")
+        download_sources(refresh=True, espn_only=True)
+        load_player_data(database_url=database_url, resume=True, only_espn=True)
+        print("2026 ESPN data refresh complete.")
+        return
+
     if args.initial_load and has_data:
         raise SystemExit("Database is not empty. Use --force-reset only if you intentionally want to delete existing data.")
 

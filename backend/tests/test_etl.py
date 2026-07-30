@@ -218,6 +218,40 @@ def test_statsbomb_player_events_are_off_by_default():
     assert load_player_data_module.STORE_PLAYER_EVENTS is False
 
 
+def test_espn_goal_reconciliation_fills_only_missing_totals():
+    class FakeCursor:
+        rowcount = 3
+
+        def execute(self, sql, params=()):
+            self.sql = sql
+            self.params = params
+
+    cursor = FakeCursor()
+    inserted = load_player_data_module.reconcile_espn_stat_goals(cursor)
+
+    assert inserted == 3
+    assert "pms.source_id = 'espn_2026'" in cursor.sql
+    assert "expected_goals > COALESCE(ev.stored_goals, 0)" in cursor.sql
+    assert "generate_series(1, missing.missing_goals)" in cursor.sql
+    assert "stat_reconciliation" in cursor.sql
+
+
+@pytest.mark.parametrize(
+    ("event_type", "is_goal", "is_penalty"),
+    [
+        ("goal", True, False),
+        ("goal---header", True, False),
+        ("penalty---scored", True, True),
+        ("penalty---missed", False, False),
+        ("yellow-card", False, False),
+    ],
+)
+def test_espn_goal_event_variants(event_type, is_goal, is_penalty):
+    event = {"type": {"type": event_type}}
+    assert load_player_data_module.is_espn_goal_event(event) is is_goal
+    assert load_player_data_module.is_espn_penalty_goal(event) is is_penalty
+
+
 def test_statsbomb_loader_is_assists_only():
     constants = "\n".join(str(value) for value in load_player_data_module.load_statsbomb.__code__.co_consts)
     assert "goal_assist" in constants

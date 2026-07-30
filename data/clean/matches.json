@@ -19546,7 +19546,7 @@
     "home_original": "Argentina",
     "away_original": "Bosnia-Herzegovina",
     "home_team": "Argentina",
-    "away_team": "Bosnia-Herzegovina",
+    "away_team": "Bosnia & Herzegovina",
     "home_score": 2,
     "away_score": 1,
     "stadium_name": "Estádio do Maracanã",
@@ -19576,14 +19576,14 @@
         "side": "away",
         "index": 0,
         "player_name": "Vedad Ibišević",
-        "team": "Bosnia-Herzegovina",
+        "team": "Bosnia & Herzegovina",
         "minute": 85,
         "stoppage_minute": null,
         "is_penalty": false,
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2014|2014-06-15|matchday 4|group f|argentina|bosnia-herzegovina"
+    "source_match_key": "2014|2014-06-15|matchday 4|group f|argentina|bosnia & herzegovina"
   },
   {
     "source_file": "worldcup-2014.json",
@@ -19645,7 +19645,7 @@
     "home_original": "Nigeria",
     "away_original": "Bosnia-Herzegovina",
     "home_team": "Nigeria",
-    "away_team": "Bosnia-Herzegovina",
+    "away_team": "Bosnia & Herzegovina",
     "home_score": 1,
     "away_score": 0,
     "stadium_name": "Arena Pantanal",
@@ -19662,7 +19662,7 @@
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2014|2014-06-21|matchday 10|group f|nigeria|bosnia-herzegovina"
+    "source_match_key": "2014|2014-06-21|matchday 10|group f|nigeria|bosnia & herzegovina"
   },
   {
     "source_file": "worldcup-2014.json",
@@ -19744,7 +19744,7 @@
     "group_name": "Group F",
     "home_original": "Bosnia-Herzegovina",
     "away_original": "Iran",
-    "home_team": "Bosnia-Herzegovina",
+    "home_team": "Bosnia & Herzegovina",
     "away_team": "Iran",
     "home_score": 3,
     "away_score": 1,
@@ -19755,7 +19755,7 @@
         "side": "home",
         "index": 0,
         "player_name": "Edin Džeko",
-        "team": "Bosnia-Herzegovina",
+        "team": "Bosnia & Herzegovina",
         "minute": 23,
         "stoppage_minute": null,
         "is_penalty": false,
@@ -19765,7 +19765,7 @@
         "side": "home",
         "index": 1,
         "player_name": "Miralem Pjanić",
-        "team": "Bosnia-Herzegovina",
+        "team": "Bosnia & Herzegovina",
         "minute": 59,
         "stoppage_minute": null,
         "is_penalty": false,
@@ -19775,7 +19775,7 @@
         "side": "home",
         "index": 2,
         "player_name": "Avdija Vršajević",
-        "team": "Bosnia-Herzegovina",
+        "team": "Bosnia & Herzegovina",
         "minute": 83,
         "stoppage_minute": null,
         "is_penalty": false,
@@ -19792,7 +19792,7 @@
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2014|2014-06-25|matchday 14|group f|bosnia-herzegovina|iran"
+    "source_match_key": "2014|2014-06-25|matchday 14|group f|bosnia & herzegovina|iran"
   },
   {
     "source_file": "worldcup-2014.json",
@@ -25250,7 +25250,7 @@
     "group_name": "Group E",
     "home_original": "Ivory Coast",
     "away_original": "Ecuador",
-    "home_team": "Ivory Coast",
+    "home_team": "Côte d'Ivoire",
     "away_team": "Ecuador",
     "home_score": 1,
     "away_score": 0,
@@ -25261,14 +25261,14 @@
         "side": "home",
         "index": 0,
         "player_name": "Amad Diallo",
-        "team": "Ivory Coast",
+        "team": "Côte d'Ivoire",
         "minute": 90,
         "stoppage_minute": null,
         "is_penalty": false,
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2026|2026-06-14|matchday 4|group e|ivory coast|ecuador"
+    "source_match_key": "2026|2026-06-14|matchday 4|group e|côte d'ivoire|ecuador"
   },
   {
     "source_file": "worldcup-2026.json",
@@ -25281,7 +25281,7 @@
     "home_original": "Germany",
     "away_original": "Ivory Coast",
     "home_team": "Germany",
-    "away_team": "Ivory Coast",
+    "away_team": "Côte d'Ivoire",
     "home_score": 2,
     "away_score": 1,
     "stadium_name": "Toronto",
@@ -25311,14 +25311,14 @@
         "side": "away",
         "index": 0,
         "player_name": "Franck Kessié",
-        "team": "Ivory Coast",
+        "team": "Côte d'Ivoire",
         "minute": 30,
         "stoppage_minute": null,
         "is_penalty": false,
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2026|2026-06-20|matchday 10|group e|germany|ivory coast"
+    "source_match_key": "2026|2026-06-20|matchday 10|group e|germany|côte d'ivoire"
   },
   {
     "source_file": "worldcup-2026.json",
@@ -25350,7 +25350,7 @@
     "home_original": "Curaçao",
     "away_original": "Ivory Coast",
     "home_team": "Curaçao",
-    "away_team": "Ivory Coast",
+    "away_team": "Côte d'Ivoire",
     "home_score": 0,
     "away_score": 2,
     "stadium_name": "Philadelphia",
@@ -25360,7 +25360,7 @@
         "side": "away",
         "index": 0,
         "player_name": "Nicolas Pépé",
-        "team": "Ivory Coast",
+        "team": "Côte d'Ivoire",
         "minute": 7,
         "stoppage_minute": null,
         "is_penalty": false,
@@ -25370,14 +25370,14 @@
         "side": "away",
         "index": 1,
         "player_name": "Nicolas Pépé",
-        "team": "Ivory Coast",
+        "team": "Côte d'Ivoire",
         "minute": 64,
         "stoppage_minute": null,
         "is_penalty": false,
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2026|2026-06-25|matchday 15|group e|curaçao|ivory coast"
+    "source_match_key": "2026|2026-06-25|matchday 15|group e|curaçao|côte d'ivoire"
   },
   {
     "source_file": "worldcup-2026.json",
@@ -27814,7 +27814,7 @@
     "group_name": null,
     "home_original": "Ivory Coast",
     "away_original": "Norway",
-    "home_team": "Ivory Coast",
+    "home_team": "Côte d'Ivoire",
     "away_team": "Norway",
     "home_score": 1,
     "away_score": 2,
@@ -27825,7 +27825,7 @@
         "side": "home",
         "index": 0,
         "player_name": "Amad Diallo",
-        "team": "Ivory Coast",
+        "team": "Côte d'Ivoire",
         "minute": 74,
         "stoppage_minute": null,
         "is_penalty": false,
@@ -27852,7 +27852,7 @@
         "is_own_goal": false
       }
     ],
-    "source_match_key": "2026|2026-06-30|round of 32||ivory coast|norway"
+    "source_match_key": "2026|2026-06-30|round of 32||côte d'ivoire|norway"
   },
   {
     "source_file": "worldcup-2026.json",
@@ -29025,11 +29025,112 @@
     "away_original": "England",
     "home_team": "France",
     "away_team": "England",
-    "home_score": null,
-    "away_score": null,
+    "home_score": 4,
+    "away_score": 6,
     "stadium_name": "Miami",
     "stadium_city": "Miami Gardens",
-    "goals": [],
+    "goals": [
+      {
+        "side": "home",
+        "index": 0,
+        "player_name": "Kylian Mbappé",
+        "team": "France",
+        "minute": 48,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "home",
+        "index": 1,
+        "player_name": "Bradley Barcola",
+        "team": "France",
+        "minute": 54,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "home",
+        "index": 2,
+        "player_name": "Kylian Mbappé",
+        "team": "France",
+        "minute": 66,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "home",
+        "index": 3,
+        "player_name": "Ousmane Dembélé",
+        "team": "France",
+        "minute": 90,
+        "stoppage_minute": 6,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 0,
+        "player_name": "Declan Rice",
+        "team": "England",
+        "minute": 3,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 1,
+        "player_name": "Ezri Konsa",
+        "team": "England",
+        "minute": 18,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 2,
+        "player_name": "Bukayo Saka",
+        "team": "England",
+        "minute": 37,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 3,
+        "player_name": "Bukayo Saka",
+        "team": "England",
+        "minute": 45,
+        "stoppage_minute": 1,
+        "is_penalty": false,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 4,
+        "player_name": "Bukayo Saka",
+        "team": "England",
+        "minute": 87,
+        "stoppage_minute": null,
+        "is_penalty": true,
+        "is_own_goal": false
+      },
+      {
+        "side": "away",
+        "index": 5,
+        "player_name": "Jude Bellingham",
+        "team": "England",
+        "minute": 90,
+        "stoppage_minute": 8,
+        "is_penalty": false,
+        "is_own_goal": false
+      }
+    ],
     "source_match_key": "2026|2026-07-18|match for third place||france|england"
   },
   {
@@ -29044,11 +29145,22 @@
     "away_original": "Argentina",
     "home_team": "Spain",
     "away_team": "Argentina",
-    "home_score": null,
-    "away_score": null,
+    "home_score": 1,
+    "away_score": 0,
     "stadium_name": "New York/New Jersey",
     "stadium_city": "East Rutherford",
-    "goals": [],
+    "goals": [
+      {
+        "side": "home",
+        "index": 0,
+        "player_name": "Ferran Torres",
+        "team": "Spain",
+        "minute": 106,
+        "stoppage_minute": null,
+        "is_penalty": false,
+        "is_own_goal": false
+      }
+    ],
     "source_match_key": "2026|2026-07-19|final||spain|argentina"
   },
   {

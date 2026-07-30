@@ -79,7 +79,21 @@ python scripts/deploy_database.py --force-reset
 
 Use `--force-reset` only after taking any needed backups.
 
-## 6. Test the Live App
+## 6. Refresh Completed 2026 Statistics
+
+When the database already exists and only the latest 2026 player statistics are
+missing, do not reset the database and do not rerun the large StatsBomb load.
+Set `DATABASE_URL` to the Render PostgreSQL connection string and run:
+
+```bash
+python scripts/deploy_database.py --update-2026
+```
+
+The command refreshes only ESPN's 2026 scoreboard and summaries, updates match
+scores/appearances/player statistics, and inserts any missing goal totals in an
+idempotent reconciliation step.
+
+## 7. Test the Live App
 
 Check the API:
 
@@ -109,3 +123,4 @@ Verify:
 - Player Compare autocomplete can find `Lionel Messi` and `Harry Kane`.
 - Team Compare autocomplete can find `Argentina`.
 - Data Quality shows source coverage.
+- Player Leaderboards shows Kylian Mbappé with 22 all-time World Cup goals.

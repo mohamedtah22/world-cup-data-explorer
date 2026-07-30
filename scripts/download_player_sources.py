@@ -193,34 +193,49 @@ def download_espn_2026(metadata, refresh):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--refresh", action="store_true", help="Redownload cached public source files")
+    parser.add_argument(
+        "--espn-only",
+        action="store_true",
+        help="Refresh only the lightweight ESPN 2026 scoreboard and summaries",
+    )
     args = parser.parse_args()
-    metadata = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "fjelstul_datasets": [],
-        "statsbomb_coverage": [],
-        "espn_2026_coverage": [],
-        "issues": [],
-    }
 
-    for dataset in FJELSTUL_DATASETS:
-        target = FJELSTUL_DIR / f"{dataset}.csv"
-        size = download(f"{FJELSTUL_BASE}/{dataset}.csv", target, refresh=args.refresh)
-        metadata["fjelstul_datasets"].append(
-            {
-                "source_id": "fjelstul",
-                "source_name": "Fjelstul World Cup Database",
-                "dataset_name": dataset,
-                "file_path": str(target.relative_to(ROOT)),
-                "bytes": size,
-            }
-        )
+    if args.espn_only and METADATA_FILE.exists():
+        metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
+        metadata["generated_at"] = datetime.now(timezone.utc).isoformat()
+        metadata["issues"] = [
+            issue for issue in metadata.get("issues", []) if issue.get("source_id") != "espn_2026"
+        ]
+    else:
+        metadata = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "fjelstul_datasets": [],
+            "statsbomb_coverage": [],
+            "espn_2026_coverage": [],
+            "issues": [],
+        }
 
-    download_statsbomb_coverage(metadata, refresh=args.refresh)
+    if not args.espn_only:
+        for dataset in FJELSTUL_DATASETS:
+            target = FJELSTUL_DIR / f"{dataset}.csv"
+            size = download(f"{FJELSTUL_BASE}/{dataset}.csv", target, refresh=args.refresh)
+            metadata["fjelstul_datasets"].append(
+                {
+                    "source_id": "fjelstul",
+                    "source_name": "Fjelstul World Cup Database",
+                    "dataset_name": dataset,
+                    "file_path": str(target.relative_to(ROOT)),
+                    "bytes": size,
+                }
+            )
+
+        download_statsbomb_coverage(metadata, refresh=args.refresh)
     download_espn_2026(metadata, refresh=args.refresh)
     METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     METADATA_FILE.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Downloaded {len(metadata['fjelstul_datasets'])} Fjelstul datasets")
-    print(f"Detected {len(metadata['statsbomb_coverage'])} StatsBomb World Cup seasons")
+    if not args.espn_only:
+        print(f"Downloaded {len(metadata['fjelstul_datasets'])} Fjelstul datasets")
+        print(f"Detected {len(metadata['statsbomb_coverage'])} StatsBomb World Cup seasons")
     print(f"Cached {len(metadata['espn_2026_coverage'])} ESPN 2026 source groups")
 
 

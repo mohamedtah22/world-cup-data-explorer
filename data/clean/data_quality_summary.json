@@ -2,10 +2,18 @@
   "raw_records": 1069,
   "cleaned_records": 1069,
   "duplicate_records": 0,
-  "missing_scores": 3,
+  "missing_scores": 1,
   "missing_stadiums": 0,
-  "alias_mappings": 2,
+  "alias_mappings": 4,
   "alias_pairs": [
+    [
+      "Bosnia-Herzegovina",
+      "Bosnia & Herzegovina"
+    ],
+    [
+      "Ivory Coast",
+      "Côte d'Ivoire"
+    ],
     [
       "United States",
       "USA"
