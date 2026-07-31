@@ -3,7 +3,7 @@ import Pagination from "../components/Pagination";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateView";
 import { api } from "../services/api";
 import { formatNumber, hasValue } from "../utils/format";
-import "../leaderboards.css";
+import "../players.css";
 
 export default function Players() {
   const [filters, setFilters] = useState({ search: "", team: "", tournament: "", position: "", sort_by: "goals", order: "desc" });
