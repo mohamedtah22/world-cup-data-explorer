@@ -9,28 +9,29 @@ import Players from "./pages/Players";
 import PlayerLeaderboards from "./pages/PlayerLeaderboards";
 import PlayerCompare from "./pages/PlayerCompare";
 import Icon from "./components/Icon";
+import "./style.css";
 
-const pageDefinitions = [
-  { key: "overview", label: "Overview", icon: "overview", component: Overview, description: "A complete view of World Cup history through 2026." },
-  { key: "matches", label: "Matches", icon: "matches", component: Matches, description: "Search every match by edition, team, stage, date, or stadium." },
-  { key: "teams", label: "Teams", icon: "teams", component: Teams, description: "Compare historical records, results, and tournament appearances." },
-  { key: "players", label: "Players", icon: "players", component: Players, description: "Explore player careers, goals, appearances, and match history." },
-  { key: "leaderboards", label: "Leaderboards", icon: "leaderboard", component: PlayerLeaderboards, description: "The leading World Cup players across the main statistics." },
-  { key: "tournaments", label: "Tournaments", icon: "tournaments", component: Tournaments, description: "Browse every edition and inspect its teams, scorers, and matches." },
-  { key: "team-compare", label: "Team Compare", icon: "compare", component: Compare, description: "Place two national teams side by side." },
-  { key: "player-compare", label: "Player Compare", icon: "playerCompare", component: PlayerCompare, description: "Compare two players using equivalent database statistics." },
-  { key: "data-quality", label: "Data Quality", icon: "quality", component: DataQuality, description: "See data sources, coverage, cleaning, and quality checks." },
+const pages = [
+  { key: "overview", label: "Home", icon: "overview", component: Overview, description: "World Cup history, records, and trends in one live database." },
+  { key: "tournaments", label: "Tournaments", icon: "tournaments", component: Tournaments, description: "Choose any edition and open its teams, scorers, matches, and headline numbers." },
+  { key: "matches", label: "Matches", icon: "matches", component: Matches, description: "Search the complete match archive by edition, team, stage, date, or venue." },
+  { key: "teams", label: "Teams", icon: "teams", component: Teams, description: "Explore every national team's historical World Cup record." },
+  { key: "players", label: "Players", icon: "players", component: Players, description: "Inspect player careers, tournament appearances, goals, and match history." },
+  { key: "leaderboards", label: "Leaderboards", icon: "leaderboard", component: PlayerLeaderboards, description: "All-time player rankings across the statistics covered by the database." },
+  { key: "team-compare", label: "Team Compare", icon: "compare", component: Compare, description: "Compare two national teams side by side." },
+  { key: "player-compare", label: "Player Compare", icon: "playerCompare", component: PlayerCompare, description: "Compare two players using the same database measures." },
+  { key: "data-quality", label: "Data Quality", icon: "quality", component: DataQuality, description: "Review data sources, coverage, cleaning, and validation results." },
 ];
 
 function getInitialPage() {
   const hash = window.location.hash.replace(/^#\/?/, "");
-  return pageDefinitions.some((page) => page.key === hash) ? hash : "overview";
+  return pages.some((page) => page.key === hash) ? hash : "overview";
 }
 
 export default function App() {
   const [pageKey, setPageKey] = useState(getInitialPage);
   const [menuOpen, setMenuOpen] = useState(false);
-  const page = useMemo(() => pageDefinitions.find((item) => item.key === pageKey) || pageDefinitions[0], [pageKey]);
+  const page = useMemo(() => pages.find((item) => item.key === pageKey) || pages[0], [pageKey]);
   const CurrentPage = page.component;
 
   useEffect(() => {
@@ -42,71 +43,63 @@ export default function App() {
   useEffect(() => {
     function onHashChange() {
       const hash = window.location.hash.replace(/^#\/?/, "");
-      if (pageDefinitions.some((item) => item.key === hash)) setPageKey(hash);
+      if (pages.some((item) => item.key === hash)) setPageKey(hash);
     }
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   return (
-    <main className="app-shell">
-      <button className="mobile-menu-button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation">
-        <Icon name={menuOpen ? "close" : "menu"} />
-      </button>
+    <main className="site-shell">
+      <header className="topbar">
+        <button className="brand-button" onClick={() => setPageKey("overview")} aria-label="Open home page">
+          <span className="brand-emblem" aria-hidden="true"><Icon name="goal" size={23} /></span>
+          <span className="brand-copy">
+            <strong>WORLD CUP</strong>
+            <small>DATA EXPLORER</small>
+          </span>
+        </button>
 
-      {menuOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
-
-      <nav className={`sidebar ${menuOpen ? "sidebar-open" : ""}`} aria-label="Primary navigation">
-        <div className="brand">
-          <div className="brand-mark"><span /></div>
-          <div>
-            <strong>World Cup</strong>
-            <span>Data Explorer</span>
-          </div>
-        </div>
-
-        <div className="nav-section-label">Explore</div>
-        <div className="nav-items">
-          {pageDefinitions.map((item) => (
+        <nav className={`main-navigation ${menuOpen ? "navigation-open" : ""}`} aria-label="Primary navigation">
+          {pages.map((item) => (
             <button
               key={item.key}
               className={pageKey === item.key ? "active" : ""}
               onClick={() => setPageKey(item.key)}
             >
-              <Icon name={item.icon} size={19} />
+              <Icon name={item.icon} size={17} />
               <span>{item.label}</span>
             </button>
           ))}
-        </div>
+        </nav>
 
-        <div className="sidebar-footer">
-          <div className="database-status">
-            <span className="status-dot" />
-            <div>
-              <b>PostgreSQL archive</b>
-              <small>23 editions · through 2026</small>
-            </div>
-          </div>
-          <small className="cold-start-note">The free Render API may take about 40 seconds on the first visit.</small>
+        <div className="topbar-actions">
+          <div className="live-data-badge"><span className="status-dot" /> Live database</div>
+          <button className="mobile-menu-button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation">
+            <Icon name={menuOpen ? "close" : "menu"} />
+          </button>
         </div>
-      </nav>
+      </header>
 
-      <section className="content">
-        <header className="page-header">
+      {menuOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
+
+      <section className="page-shell">
+        <header className="page-intro">
           <div>
-            <span className="eyebrow">FIFA Men&apos;s World Cup Archive</span>
+            <span className="eyebrow">FIFA MEN&apos;S WORLD CUP · 1930—2026</span>
             <h1>{page.label}</h1>
             <p>{page.description}</p>
           </div>
-          <div className="header-badge">
-            <span className="status-dot" />
-            Data through 2026
+          <div className="page-intro-meta">
+            <span>React</span><span>Flask</span><span>PostgreSQL</span>
           </div>
         </header>
+
         <CurrentPage />
-        <footer className="app-footer">
-          <span>World Cup Data Explorer</span>
-          <span>React · Flask · PostgreSQL</span>
+
+        <footer className="site-footer">
+          <div><strong>World Cup Data Explorer</strong><span>Real-world relational data, cleaned and connected.</span></div>
+          <small>Free Render services may need about 40 seconds to wake up on the first visit.</small>
         </footer>
       </section>
     </main>
