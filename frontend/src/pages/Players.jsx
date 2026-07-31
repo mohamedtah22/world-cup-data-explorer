@@ -51,7 +51,7 @@ export default function Players() {
         </div>
 
         <div className="player-coverage-note">
-          Goals and match appearances come from separate source tables. The cards show only values that are actually recorded; appearance numbers are labelled as recorded coverage and are not used to invent missing historical matches.
+          A recorded zero is shown when the database contains appearance coverage and the player did not record that event. A field stays hidden only when the source does not provide enough coverage to treat zero as a confirmed value.
         </div>
 
         {error && <ErrorState message={error} />}
@@ -80,15 +80,16 @@ export default function Players() {
 }
 
 function PlayerCard({ player, selected, onSelect }) {
+  const hasAppearanceCoverage = Number(player.appearances) > 0;
   const metrics = [
-    { label: "Goals", value: player.goals, always: true },
+    { label: "Goals", value: nonNegativeValue(player.goals), always: true },
     { label: "Recorded apps", value: positiveValue(player.appearances) },
-    { label: "Recorded starts", value: positiveValue(player.starts) },
-    { label: "Sub apps", value: positiveValue(player.substitute_appearances) },
-    { label: "Assists", value: positiveValue(player.assists) },
+    { label: "Recorded starts", value: coveredValue(player.starts, hasAppearanceCoverage) },
+    { label: "Sub apps", value: coveredValue(player.substitute_appearances, hasAppearanceCoverage) },
+    { label: "Assists", value: coveredValue(player.assists, hasAppearanceCoverage) },
   ].filter((metric) => metric.always || hasValue(metric.value));
 
-  const missingAppearances = Number(player.goals) > 0 && Number(player.appearances) === 0;
+  const missingAppearances = Number(player.goals) > 0 && !hasAppearanceCoverage;
 
   return (
     <button className={`player-record-card ${selected ? "selected" : ""}`} onClick={onSelect}>
@@ -123,17 +124,18 @@ function PlayerDetailPanel({ detail }) {
   }
 
   const player = detail.profile;
+  const hasAppearanceCoverage = Number(player.appearances) > 0;
   const metrics = [
-    { label: "Goals", value: player.goals },
+    { label: "Goals", value: nonNegativeValue(player.goals) },
     { label: "Recorded appearances", value: positiveValue(player.appearances) },
-    { label: "Recorded starts", value: positiveValue(player.starts) },
-    { label: "Substitute appearances", value: positiveValue(player.substitute_appearances) },
+    { label: "Recorded starts", value: coveredValue(player.starts, hasAppearanceCoverage) },
+    { label: "Substitute appearances", value: coveredValue(player.substitute_appearances, hasAppearanceCoverage) },
     { label: "Minutes recorded", value: positiveValue(player.minutes_played) },
-    { label: "Penalty goals", value: positiveValue(player.penalty_goals) },
-    { label: "Assists recorded", value: positiveValue(player.assists) },
+    { label: "Penalty goals", value: nonNegativeValue(player.penalty_goals) },
+    { label: "Assists", value: coveredValue(player.assists, hasAppearanceCoverage) },
   ].filter((metric) => hasValue(metric.value));
 
-  const missingAppearances = Number(player.goals) > 0 && Number(player.appearances) === 0;
+  const missingAppearances = Number(player.goals) > 0 && !hasAppearanceCoverage;
 
   return (
     <aside className="detail-panel player-detail-card">
@@ -149,7 +151,7 @@ function PlayerDetailPanel({ detail }) {
       </div>
 
       {missingAppearances && (
-        <div className="player-coverage-note">The goal events are stored, but no match-by-match appearance rows are available for this historical player. No appearance rate is calculated.</div>
+        <div className="player-coverage-note">The goal events are stored, but no match-by-match appearance rows are available for this historical player. Statistics that depend on appearance coverage are not shown as zero.</div>
       )}
 
       <h3>Tournaments</h3>
@@ -165,7 +167,11 @@ function PlayerDetailPanel({ detail }) {
       {(detail.match_history || []).length ? (
         <div className="history player-history-list">
           {detail.match_history.slice(0, 8).map((match) => (
-            <p key={match.match_id}><b>{match.year}</b><span>{match.home_team} {match.home_score}:{match.away_score} {match.away_team}</span>{Number(match.goals) > 0 && <small>{formatNumber(match.goals)} goals</small>}</p>
+            <p key={match.match_id}>
+              <b>{match.year}</b>
+              <span>{match.home_team} {match.home_score}:{match.away_score} {match.away_team}</span>
+              <small>{formatNumber(nonNegativeValue(match.goals))} goals{hasValue(match.assists) ? ` · ${formatNumber(nonNegativeValue(match.assists))} assists` : ""}</small>
+            </p>
           ))}
         </div>
       ) : <p className="empty-history">No recorded match-by-match appearance history is available.</p>}
@@ -175,6 +181,15 @@ function PlayerDetailPanel({ detail }) {
 
 function positiveValue(value) {
   return Number(value) > 0 ? Number(value) : null;
+}
+
+function nonNegativeValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function coveredValue(value, hasCoverage) {
+  return hasCoverage ? nonNegativeValue(value) : null;
 }
 
 function initials(name) {
