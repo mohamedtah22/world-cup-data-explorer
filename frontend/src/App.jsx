@@ -9,12 +9,13 @@ import Players from "./pages/Players";
 import PlayerLeaderboards from "./pages/PlayerLeaderboards";
 import PlayerCompare from "./pages/PlayerCompare";
 import Icon from "./components/Icon";
+import TournamentResultsPortal from "./components/TournamentResultsPortal";
 import "./style.css";
 import "./premium.css";
 
 const pages = [
   { key: "overview", label: "Home", icon: "overview", component: Overview, description: "World Cup history, records, and trends in one live database." },
-  { key: "tournaments", label: "Tournaments", icon: "tournaments", component: Tournaments, description: "Choose any edition and open its teams, scorers, matches, and headline numbers." },
+  { key: "tournaments", label: "Tournaments", icon: "tournaments", component: Tournaments, description: "Choose any edition and open its champion, final ranking, teams, scorers, matches, and headline numbers." },
   { key: "matches", label: "Matches", icon: "matches", component: Matches, description: "Search the complete match archive by edition, team, stage, date, or venue." },
   { key: "teams", label: "Teams", icon: "teams", component: Teams, description: "Explore every national team's historical World Cup record." },
   { key: "players", label: "Players", icon: "players", component: Players, description: "Inspect player careers, tournament appearances, goals, and match history." },
@@ -97,6 +98,7 @@ export default function App() {
         </header>
 
         <CurrentPage />
+        {pageKey === "tournaments" && <TournamentResultsPortal />}
 
         <footer className="site-footer">
           <div><strong>World Cup Data Explorer</strong><span>Real-world relational data, cleaned and connected.</span></div>
