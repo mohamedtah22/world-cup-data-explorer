@@ -10,6 +10,7 @@ import PlayerLeaderboards from "./pages/PlayerLeaderboards";
 import PlayerCompare from "./pages/PlayerCompare";
 import Icon from "./components/Icon";
 import "./style.css";
+import "./premium.css";
 
 const pages = [
   { key: "overview", label: "Home", icon: "overview", component: Overview, description: "World Cup history, records, and trends in one live database." },
