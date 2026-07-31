@@ -11,7 +11,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app
+    startCommand: python scripts/historical_appearances_backfill.py --startup-safe && gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
